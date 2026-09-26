@@ -65,17 +65,18 @@ public sealed class ProductDeposit
     public bool IsSameBatchKind(ProductDeposit other)
     {
         return string.Equals(
-                   ProductId,
-                   other.ProductId,
-                   StringComparison.OrdinalIgnoreCase)
-               && IsPackaged == other.IsPackaged
-               && string.Equals(
-                   PackagingId,
-                   other.PackagingId,
-                   StringComparison.OrdinalIgnoreCase)
-               && string.Equals(
-                   Quality,
-                   other.Quality,
-                   StringComparison.OrdinalIgnoreCase);
+                ProductId,
+                other.ProductId,
+                StringComparison.OrdinalIgnoreCase)
+            && IsPackaged == other.IsPackaged
+            && string.Equals(
+                PackagingId,
+                other.PackagingId,
+                StringComparison.OrdinalIgnoreCase)
+            && PackageCapacity == other.PackageCapacity
+            && string.Equals(
+                Quality,
+                other.Quality,
+                StringComparison.OrdinalIgnoreCase);
     }
 }

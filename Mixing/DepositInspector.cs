@@ -128,6 +128,80 @@ public static class DepositInspector
         return true;
     }
 
+    public static bool TryRemoveExactBatch(
+        StorageInstance storage,
+        ProductDeposit expected,
+        out int removedPackages,
+        out string problem)
+    {
+        removedPackages = 0;
+        problem = string.Empty;
+
+        /*
+        * Revalidate immediately before mutation.
+        * At this point the storage must contain nothing except
+        * the exact uniform batch we previously accepted.
+        */
+        if (!TryGetUniformBatch(
+                storage,
+                out ProductDeposit? actual,
+                out problem))
+        {
+            return false;
+        }
+
+        if (actual == null)
+        {
+            problem = "no product batch found";
+            return false;
+        }
+
+        if (!actual.IsSameBatchKind(expected))
+        {
+            problem =
+                "batch changed before it could be collected";
+
+            return false;
+        }
+
+        if (actual.StackQuantity != expected.StackQuantity)
+        {
+            problem =
+                $"batch quantity changed; expected " +
+                $"{expected.StackQuantity}, found " +
+                $"{actual.StackQuantity}";
+
+            return false;
+        }
+
+        /*
+        * TryRemoveQuantity normally isn't specific enough for us
+        * because it only matches the product definition ID.
+        *
+        * Here it IS safe because we just proved that every occupied
+        * slot contains the same product, packaging and quality,
+        * and that its total quantity exactly matches the order.
+        *
+        * This also avoids Storage.RemoveItem's native-object identity
+        * comparison, which does not survive our IL2CPP wrapper path.
+        */
+        removedPackages =
+            storage.TryRemoveQuantity(
+                expected.ProductId,
+                expected.StackQuantity);
+
+        if (removedPackages != expected.StackQuantity)
+        {
+            problem =
+                $"storage removed {removedPackages} packages; " +
+                $"expected {expected.StackQuantity}";
+
+            return false;
+        }
+
+        return true;
+    }
+
     public static string Describe(ProductDeposit batch)
     {
         string product =

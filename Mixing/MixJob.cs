@@ -24,7 +24,12 @@ public sealed class MixJob
     public int PackageCapacity { get; set; }
     public int RequiredPackages { get; set; }
 
+    public string InputQuality { get; set; } = "";
+
     public string DeadDropGuid { get; set; } = "";
+
+    public int StartedAtGameMinutes { get; set; }
+    public int CompletesAtGameMinutes { get; set; }
 
     public void Reset()
     {
@@ -42,6 +47,11 @@ public sealed class MixJob
         PackageCapacity = 0;
         RequiredPackages = 0;
 
+        InputQuality = "";
+
         DeadDropGuid = "";
+
+        StartedAtGameMinutes = 0;
+        CompletesAtGameMinutes = 0;
     }
 }

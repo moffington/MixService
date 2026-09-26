@@ -5,6 +5,7 @@ using MelonLoader;
 using MixService.Mixing;
 using S1API.DeadDrops;
 using S1API.Entities;
+using S1API.GameTime;
 using S1API.Messaging;
 using S1API.Products;
 using S1API.Saveables;
@@ -19,6 +20,8 @@ public sealed class MixerContactNpc : NPC
     private const string BrickPackagingId = "brick";
     private const int BrickCapacity = 20;
 
+    private const int ProcessingDurationMinutes = 6 * 60;
+
     public static MixerContactNpc? Instance { get; private set; }
 
     private static readonly System.Random Random = new();
@@ -29,6 +32,12 @@ public sealed class MixerContactNpc : NPC
     private DeadDropInstance? _reservedDrop;
     private bool _depositAcknowledged;
     private string? _lastRejectedDeposit;
+
+    private bool _processingClockAttached;
+
+    private bool _createdReady;
+    private bool _saveDataLoaded;
+    private bool _runtimeStateInitialized;
 
     public override bool IsPhysical => false;
 
@@ -45,6 +54,15 @@ public sealed class MixerContactNpc : NPC
         base.OnCreated();
 
         Instance = this;
+
+        /*
+        * base.OnCreated() is important here: for a custom NPC without
+        * an explicit icon, S1API generates/refreshes the contact mugshot
+        * during creation.
+        */
+        _createdReady = true;
+
+        TryInitializeRuntimeState();
     }
 
     protected override void OnLoaded()
@@ -53,7 +71,43 @@ public sealed class MixerContactNpc : NPC
 
         _job ??= new MixJob();
 
+        /*
+        * Do NOT send messages directly from OnLoaded().
+        *
+        * Depending on lifecycle ordering, save data can be restored
+        * before the custom NPC has completed its creation path. Sending
+        * here can create a temporary/default conversation before Milo's
+        * final contact conversation and icon are ready.
+        */
+        _saveDataLoaded = true;
+
+        TryInitializeRuntimeState();
+    }
+
+    private void TryInitializeRuntimeState()
+    {
+        /*
+        * We need BOTH:
+        *
+        * 1. the custom NPC creation path to have completed
+        * 2. our persisted MixJob to have been restored
+        *
+        * Whichever callback happens second performs initialization.
+        */
+        if (!_createdReady ||
+            !_saveDataLoaded ||
+            _runtimeStateInitialized)
+        {
+            return;
+        }
+
+        _runtimeStateInitialized = true;
+
         ReleaseReservedDrop();
+        DetachProcessingClock();
+
+        MelonLogger.Msg(
+            $"Initializing Milo runtime state: {_job.State}");
 
         switch (_job.State)
         {
@@ -62,17 +116,11 @@ public sealed class MixerContactNpc : NPC
                 break;
 
             case MixJobState.Processing:
-                Messaging.SendTextMessage(
-                    "still working on your batch.",
-                    responses: null,
-                    responseDelay: 0f);
+                RestoreProcessing();
                 break;
 
             case MixJobState.ReadyForPickup:
-                Messaging.SendTextMessage(
-                    "your batch is ready.",
-                    responses: null,
-                    responseDelay: 0f);
+                RestoreReadyForPickup();
                 break;
 
             default:
@@ -102,7 +150,8 @@ public sealed class MixerContactNpc : NPC
 
     private void PresentTargetMenu(int page)
     {
-        ProductDefinition[] targets = GetDiscoveredCocaineTargets();
+        ProductDefinition[] targets =
+            GetDiscoveredCocaineTargets();
 
         if (targets.Length == 0)
         {
@@ -122,8 +171,8 @@ public sealed class MixerContactNpc : NPC
         }
 
         int pageCount =
-            (targets.Length + TargetPageSize - 1) /
-            TargetPageSize;
+            (targets.Length + TargetPageSize - 1)
+            / TargetPageSize;
 
         if (page < 0)
             page = 0;
@@ -131,26 +180,35 @@ public sealed class MixerContactNpc : NPC
         if (page >= pageCount)
             page = 0;
 
-        int start = page * TargetPageSize;
-        int end = Math.Min(
-            start + TargetPageSize,
-            targets.Length);
+        int start =
+            page * TargetPageSize;
+
+        int end =
+            Math.Min(
+                start + TargetPageSize,
+                targets.Length);
 
         var responses = new List<Response>();
 
         for (int i = start; i < end; i++)
         {
-            ProductDefinition target = targets[i];
+            ProductDefinition target =
+                targets[i];
 
             var response = new Response
             {
                 Label =
                     $"mixservice_target_{page}_{i}",
-                Text = target.Name
+
+                Text =
+                    target.Name
             };
 
-            string targetId = target.ID;
-            string targetName = target.Name;
+            string targetId =
+                target.ID;
+
+            string targetName =
+                target.Name;
 
             response.OnTriggered = () =>
             {
@@ -171,7 +229,9 @@ public sealed class MixerContactNpc : NPC
             {
                 Label =
                     $"mixservice_target_more_{page}",
-                Text = "more..."
+
+                Text =
+                    "more..."
             };
 
             more.OnTriggered = () =>
@@ -186,10 +246,13 @@ public sealed class MixerContactNpc : NPC
         {
             Label =
                 $"mixservice_target_cancel_{page}",
-            Text = "never mind"
+
+            Text =
+                "never mind"
         };
 
-        cancel.OnTriggered = PresentIdleMenu;
+        cancel.OnTriggered =
+            PresentIdleMenu;
 
         responses.Add(cancel);
 
@@ -217,7 +280,8 @@ public sealed class MixerContactNpc : NPC
         string targetProductId,
         string targetProductName)
     {
-        var responses = new List<Response>();
+        var responses =
+            new List<Response>();
 
         int[] quantities =
         {
@@ -229,12 +293,14 @@ public sealed class MixerContactNpc : NPC
 
         foreach (int quantity in quantities)
         {
-            int capturedQuantity = quantity;
+            int capturedQuantity =
+                quantity;
 
             var response = new Response
             {
                 Label =
                     $"mixservice_qty_{capturedQuantity}",
+
                 Text =
                     capturedQuantity == 1
                         ? "1 brick"
@@ -276,6 +342,7 @@ public sealed class MixerContactNpc : NPC
         int requiredBricks)
     {
         ReleaseReservedDrop();
+        DetachProcessingClock();
 
         DeadDropInstance[] emptyDrops =
             DeadDropManager.Empty;
@@ -295,7 +362,8 @@ public sealed class MixerContactNpc : NPC
         }
 
         _reservedDrop =
-            emptyDrops[Random.Next(emptyDrops.Length)];
+            emptyDrops[Random.Next(
+                emptyDrops.Length)];
 
         _job.Reset();
 
@@ -406,11 +474,6 @@ public sealed class MixerContactNpc : NPC
             $"at {_reservedDrop.Name}.",
             new[] { CreateCancelOrderResponse() });
 
-        /*
-         * The player may have saved after placing items
-         * in the dead drop but before this mod observed
-         * the storage event. Inspect immediately.
-         */
         if (!_reservedDrop.IsEmpty)
             OnDropContentsChanged();
     }
@@ -512,29 +575,247 @@ public sealed class MixerContactNpc : NPC
             return;
         }
 
-        _lastRejectedDeposit = null;
-        _depositAcknowledged = true;
+        StartProcessing(batch);
+    }
 
-        string description =
-            DepositInspector.Describe(batch);
+    private void StartProcessing(
+        ProductDeposit batch)
+    {
+        if (_reservedDrop == null)
+            return;
 
-        MelonLogger.Msg(
-            $"Validated order deposit: " +
-            $"{description} -> " +
-            $"'{_job.TargetProductName}'");
+        DeadDropInstance drop =
+            _reservedDrop;
 
         /*
-         * INTENTIONALLY NON-DESTRUCTIVE FOR THIS PASS.
-         *
-         * The order remains AwaitingDeposit.
-         * Next pass will atomically consume the exact
-         * product slots and transition to Processing.
+         * Detach BEFORE mutating storage so our own removal
+         * doesn't recursively fire the deposit handler.
          */
+        drop.Storage.OnContentsChanged -=
+            OnDropContentsChanged;
+
+        _depositAcknowledged = true;
+        _lastRejectedDeposit = null;
+
+        if (!DepositInspector.TryRemoveExactBatch(
+                drop.Storage,
+                batch,
+                out int removedPackages,
+                out string problem))
+        {
+            MelonLogger.Error(
+                $"Failed to collect validated batch: {problem}");
+
+            /*
+             * Expected failure mode here is removedPackages == 0.
+             * Re-arm the drop so the player can retry.
+             */
+            if (removedPackages == 0)
+            {
+                _depositAcknowledged = false;
+
+                drop.Storage.OnContentsChanged +=
+                    OnDropContentsChanged;
+
+                RejectDeposit(
+                    $"couldn't collect the batch: {problem}");
+
+                return;
+            }
+
+            /*
+             * Partial removal should never occur after our
+             * validation pass. Don't silently continue.
+             */
+            MelonLogger.Error(
+                $"PARTIAL BATCH REMOVAL: removed " +
+                $"{removedPackages} of " +
+                $"{batch.StackQuantity} packages.");
+
+            return;
+        }
+
+        _reservedDrop = null;
+
+        _job.InputQuality =
+            batch.Quality;
+
+        _job.StartedAtGameMinutes =
+            GameClock.CurrentAbsoluteMinutes;
+
+        _job.CompletesAtGameMinutes =
+            _job.StartedAtGameMinutes
+            + ProcessingDurationMinutes;
+
+        _job.State =
+            MixJobState.Processing;
+
+        AttachProcessingClock();
+
+        MelonLogger.Msg(
+            $"Processing started: " +
+            $"{batch.StackQuantity}x " +
+            $"{batch.Quality} " +
+            $"{batch.ProductName} " +
+            $"{batch.PackagingName} -> " +
+            $"'{_job.TargetProductName}'. " +
+            $"Start={_job.StartedAtGameMinutes}, " +
+            $"Complete={_job.CompletesAtGameMinutes}");
 
         Messaging.SendTextMessage(
-            $"that's it. got {description}.",
+            $"got it. i'll have " +
+            $"{_job.TargetProductName} " +
+            $"ready in about six hours.",
             responses: null,
             responseDelay: 0f);
+    }
+
+    private void RestoreProcessing()
+    {
+        AttachProcessingClock();
+
+        /*
+         * Handles loading a save after the completion
+         * deadline already passed.
+         */
+        if (CheckProcessingCompletion())
+            return;
+
+        int remaining =
+            Math.Max(
+                0,
+                _job.CompletesAtGameMinutes
+                - GameClock.CurrentAbsoluteMinutes);
+
+        Messaging.SendTextMessage(
+            $"still working on " +
+            $"{_job.TargetProductName}. " +
+            $"about {FormatDuration(remaining)} left.",
+            responses: null,
+            responseDelay: 0f);
+
+        MelonLogger.Msg(
+            $"Restored processing order. " +
+            $"Now={GameClock.CurrentAbsoluteMinutes}, " +
+            $"Complete={_job.CompletesAtGameMinutes}, " +
+            $"Remaining={remaining}m");
+    }
+
+    private void RestoreReadyForPickup()
+    {
+        Messaging.SendTextMessage(
+            $"{_job.TargetProductName} is done. " +
+            $"i'm holding it for you.",
+            responses: null,
+            responseDelay: 0f);
+
+        MelonLogger.Msg(
+            $"Restored ready order for " +
+            $"'{_job.TargetProductName}'.");
+    }
+
+    private void AttachProcessingClock()
+    {
+        if (_processingClockAttached)
+            return;
+
+        TimeManager.OnTick +=
+            OnGameTimeTick;
+
+        TimeManager.OnSleepEnd +=
+            OnSleepEnd;
+
+        _processingClockAttached = true;
+    }
+
+    private void DetachProcessingClock()
+    {
+        if (!_processingClockAttached)
+            return;
+
+        TimeManager.OnTick =
+            (TimeManager.OnTick - OnGameTimeTick)!;
+
+        TimeManager.OnSleepEnd =
+            (TimeManager.OnSleepEnd - OnSleepEnd)!;
+
+        _processingClockAttached = false;
+    }
+
+    private void OnGameTimeTick()
+    {
+        CheckProcessingCompletion();
+    }
+
+    private void OnSleepEnd(int minutesSkipped)
+    {
+        MelonLogger.Msg(
+            $"Sleep ended; skipped " +
+            $"{minutesSkipped} game minutes.");
+
+        CheckProcessingCompletion();
+    }
+
+    private bool CheckProcessingCompletion()
+    {
+        if (_job.State !=
+            MixJobState.Processing)
+        {
+            return false;
+        }
+
+        int now =
+            GameClock.CurrentAbsoluteMinutes;
+
+        if (now <
+            _job.CompletesAtGameMinutes)
+        {
+            return false;
+        }
+
+        _job.State =
+            MixJobState.ReadyForPickup;
+
+        DetachProcessingClock();
+
+        MelonLogger.Msg(
+            $"Processing completed: " +
+            $"'{_job.TargetProductName}'. " +
+            $"Now={now}, " +
+            $"Deadline={_job.CompletesAtGameMinutes}");
+
+        /*
+         * Output creation comes next pass.
+         * For now this proves the persistent timer/state machine.
+         */
+        Messaging.SendTextMessage(
+            $"{_job.TargetProductName} is done. " +
+            $"i'm holding it for you.",
+            responses: null,
+            responseDelay: 0f);
+
+        return true;
+    }
+
+    private static string FormatDuration(
+        int totalMinutes)
+    {
+        totalMinutes =
+            Math.Max(0, totalMinutes);
+
+        int hours =
+            totalMinutes / 60;
+
+        int minutes =
+            totalMinutes % 60;
+
+        if (hours <= 0)
+            return $"{minutes}m";
+
+        if (minutes == 0)
+            return $"{hours}h";
+
+        return $"{hours}h {minutes}m";
     }
 
     private void RejectDeposit(string problem)
@@ -568,7 +849,8 @@ public sealed class MixerContactNpc : NPC
             Text = "cancel it"
         };
 
-        cancel.OnTriggered = CancelOrder;
+        cancel.OnTriggered =
+            CancelOrder;
 
         return cancel;
     }
@@ -579,6 +861,8 @@ public sealed class MixerContactNpc : NPC
             _job.TargetProductName;
 
         ReleaseReservedDrop();
+        DetachProcessingClock();
+
         _job.Reset();
 
         MelonLogger.Msg(
@@ -588,7 +872,9 @@ public sealed class MixerContactNpc : NPC
         {
             Label =
                 "mixservice_after_cancel_new_order",
-            Text = "set up another"
+
+            Text =
+                "set up another"
         };
 
         startAgain.OnTriggered = () =>
@@ -618,6 +904,7 @@ public sealed class MixerContactNpc : NPC
     protected override void OnDestroyed()
     {
         ReleaseReservedDrop();
+        DetachProcessingClock();
 
         if (ReferenceEquals(Instance, this))
             Instance = null;
