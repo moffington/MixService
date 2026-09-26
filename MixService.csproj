@@ -1,0 +1,241 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="local.build.props" Condition="Exists('local.build.props')" />
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net6.0</TargetFrameworks>
+    <TargetFramework Condition="'$(Configuration)' != 'Il2cpp'">netstandard2.1</TargetFramework>
+    <TargetFramework Condition="'$(Configuration)' == 'Il2cpp'">net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MixService</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <Configurations>CrossCompat;Mono;Il2cpp</Configurations>
+    <Platforms>AnyCPU</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AutomateLocalDeployment Condition="'$(AutomateLocalDeployment)' == ''">false</AutomateLocalDeployment>
+    <UseLocalS1APIForked Condition="'$(UseLocalS1APIForked)' == ''">false</UseLocalS1APIForked>
+    <UseLocalMelonLoaderReferences Condition="'$(UseLocalMelonLoaderReferences)' == ''">false</UseLocalMelonLoaderReferences>
+
+    <LocalS1APIRoot Condition="'$(LocalS1APIRoot)' == ''">..\S1API</LocalS1APIRoot>
+    <LocalS1APIBuildConfiguration Condition="'$(LocalS1APIBuildConfiguration)' == '' and '$(Configuration)' == 'Il2cpp'">Il2CppMelon</LocalS1APIBuildConfiguration>
+    <LocalS1APIBuildConfiguration Condition="'$(LocalS1APIBuildConfiguration)' == ''">MonoMelon</LocalS1APIBuildConfiguration>
+    <LocalS1APITargetFramework Condition="'$(LocalS1APITargetFramework)' == '' and '$(Configuration)' == 'Il2cpp'">net6.0</LocalS1APITargetFramework>
+    <LocalS1APITargetFramework Condition="'$(LocalS1APITargetFramework)' == ''">netstandard2.1</LocalS1APITargetFramework>
+    <LocalS1APIForkedPath Condition="'$(LocalS1APIForkedPath)' == ''">$(LocalS1APIRoot)\S1API\bin\$(LocalS1APIBuildConfiguration)\$(LocalS1APITargetFramework)\S1API.dll</LocalS1APIForkedPath>
+
+    <MonoAssembliesPath Condition="'$(MonoAssembliesPath)' == '' and '$(LocalMonoDeploymentPath)' != ''">$(LocalMonoDeploymentPath)\Schedule I_Data\Managed</MonoAssembliesPath>
+    <Il2CppAssembliesPath Condition="'$(Il2CppAssembliesPath)' == '' and '$(LocalIl2CppDeploymentPath)' != ''">$(LocalIl2CppDeploymentPath)\MelonLoader\Il2CppAssemblies</Il2CppAssembliesPath>
+    <MelonLoaderMonoAssembliesPath Condition="'$(MelonLoaderMonoAssembliesPath)' == '' and '$(LocalMonoDeploymentPath)' != ''">$(LocalMonoDeploymentPath)\MelonLoader\net35</MelonLoaderMonoAssembliesPath>
+    <MelonLoaderAssembliesPath Condition="'$(MelonLoaderAssembliesPath)' == '' and '$(LocalIl2CppDeploymentPath)' != ''">$(LocalIl2CppDeploymentPath)\MelonLoader\net6</MelonLoaderAssembliesPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'CrossCompat'">
+    <DefineConstants>$(DefineConstants);CROSS_COMPAT;MONO</DefineConstants>
+    <AssemblyName>MixService</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Mono'">
+    <DefineConstants>$(DefineConstants);MONO</DefineConstants>
+    <AssemblyName>MixService_Mono</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Il2cpp'">
+    <DefineConstants>$(DefineConstants);IL2CPP</DefineConstants>
+    <AssemblyName>MixService_Il2cpp</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseLocalS1APIForked)' != 'true'">
+    <PackageReference Include="S1API.Forked" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalMelonLoaderReferences)' != 'true'">
+    <PackageReference Include="LavaGang.MelonLoader" Version="0.7.1" PrivateAssets="all" NoWarn="NU1701" />
+    <PackageReference Include="HarmonyX" Version="2.15.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalS1APIForked)' == 'true'">
+    <Reference Include="S1API.Forked">
+      <HintPath>$(LocalS1APIForkedPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Label="CommonMonoUnityReferences" Condition="('$(Configuration)' == 'CrossCompat' or '$(Configuration)' == 'Mono') and '$(MonoAssembliesPath)' != ''">
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(MonoAssembliesPath)\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(MonoAssembliesPath)\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIElementsModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.UIElementsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(MonoAssembliesPath)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Label="MonoGameReferences" Condition="'$(Configuration)' == 'Mono' and '$(MonoAssembliesPath)' != ''">
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(MonoAssembliesPath)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(MonoAssembliesPath)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Label="CommonIl2CppUnityReferences" Condition="'$(Configuration)' == 'Il2cpp' and '$(Il2CppAssembliesPath)' != ''">
+    <Reference Include="Il2CppNewtonsoft.Json">
+      <HintPath>$(Il2CppAssembliesPath)\Il2CppNewtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(Il2CppAssembliesPath)\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIElementsModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.UIElementsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(Il2CppAssembliesPath)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Label="Il2CppGameReferences" Condition="'$(Configuration)' == 'Il2cpp' and '$(Il2CppAssembliesPath)' != ''">
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(Il2CppAssembliesPath)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(Il2CppAssembliesPath)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(MelonLoaderAssembliesPath)\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalMelonLoaderReferences)' == 'true' and ('$(Configuration)' == 'CrossCompat' or '$(Configuration)' == 'Mono')">
+    <Reference Include="0Harmony">
+      <HintPath>$(MelonLoaderMonoAssembliesPath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderMonoAssembliesPath)\MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalMelonLoaderReferences)' == 'true' and '$(Configuration)' == 'Il2cpp'">
+    <Reference Include="0Harmony">
+      <HintPath>$(MelonLoaderAssembliesPath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderAssembliesPath)\MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(MelonLoaderAssembliesPath)\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="ValidateLocalS1APIPath" BeforeTargets="ResolveReferences" Condition="'$(UseLocalS1APIForked)' == 'true'">
+    <Error Condition="'$(LocalS1APIForkedPath)' == ''" Text="UseLocalS1APIForked is true, but LocalS1APIForkedPath is empty. Set it in local.build.props or turn UseLocalS1APIForked off." />
+    <Error Condition="'$(LocalS1APIForkedPath)' != '' and !Exists('$(LocalS1APIForkedPath)')" Text="Local S1API was not found at '$(LocalS1APIForkedPath)'. Build S1API with configuration '$(LocalS1APIBuildConfiguration)', set LocalS1APIRoot/LocalS1APIForkedPath, or turn UseLocalS1APIForked off." />
+  </Target>
+
+  <Target Name="ValidateMonoPaths" BeforeTargets="ResolveReferences" Condition="('$(Configuration)' == 'Mono' or ('$(Configuration)' == 'CrossCompat' and '$(UseLocalMelonLoaderReferences)' == 'true')) and '$(MonoAssembliesPath)' == ''">
+    <Error Text="Set LocalMonoDeploymentPath in local.build.props, or run .\setup.ps1, before building Mono." />
+  </Target>
+
+  <Target Name="ValidateIl2CppPaths" BeforeTargets="ResolveReferences" Condition="'$(Configuration)' == 'Il2cpp' and ('$(Il2CppAssembliesPath)' == '' or '$(MelonLoaderAssembliesPath)' == '')">
+    <Error Text="Set LocalIl2CppDeploymentPath in local.build.props, or run .\setup.ps1, before building Il2cpp." />
+  </Target>
+
+  <Target Name="DeployCrossCompat" AfterTargets="Build" Condition="'$(AutomateLocalDeployment)' == 'true' and '$(Configuration)' == 'CrossCompat' and '$(LocalMonoDeploymentPath)' != ''">
+    <Message Text="[CrossCompat] Copying $(TargetFileName) to $(LocalMonoDeploymentPath)\Mods" Importance="high" />
+    <MakeDir Directories="$(LocalMonoDeploymentPath)\Mods" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(LocalMonoDeploymentPath)\Mods" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="DeployMono" AfterTargets="Build" Condition="'$(AutomateLocalDeployment)' == 'true' and '$(Configuration)' == 'Mono' and '$(LocalMonoDeploymentPath)' != ''">
+    <Message Text="[Mono] Copying $(TargetFileName) to $(LocalMonoDeploymentPath)\Mods" Importance="high" />
+    <MakeDir Directories="$(LocalMonoDeploymentPath)\Mods" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(LocalMonoDeploymentPath)\Mods" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="DeployIl2Cpp" AfterTargets="Build" Condition="'$(AutomateLocalDeployment)' == 'true' and '$(Configuration)' == 'Il2cpp' and '$(LocalIl2CppDeploymentPath)' != ''">
+    <Message Text="[Il2cpp] Copying $(TargetFileName) to $(LocalIl2CppDeploymentPath)\Mods" Importance="high" />
+    <MakeDir Directories="$(LocalIl2CppDeploymentPath)\Mods" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(LocalIl2CppDeploymentPath)\Mods" SkipUnchangedFiles="true" />
+  </Target>
+</Project>
