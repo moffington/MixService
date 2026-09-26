@@ -88,11 +88,48 @@ public sealed class MixerContactNpc : NPC
         if (_reservedDrop.IsEmpty)
             return;
 
-        _depositAcknowledged = true;
-
         MelonLogger.Msg(
             $"[MixService] Deposit detected at '{_reservedDrop.Name}'. " +
             $"ItemCount={_reservedDrop.ItemCount}");
+
+        foreach (var slot in _reservedDrop.Storage.Slots)
+        {
+            var item = slot.ItemInstance;
+
+            if (item == null)
+                continue;
+
+            var definition = item.Definition;
+
+            MelonLogger.Msg(
+                $"[MixService]   Slot: " +
+                $"ID='{definition.ID}', " +
+                $"Name='{definition.Name}', " +
+                $"SlotQuantity={slot.Quantity}, " +
+                $"InstanceQuantity={item.Quantity}, " +
+                $"Type={item.GetType().FullName}");
+
+            if (item is S1API.Products.ProductInstance product)
+            {
+                MelonLogger.Msg(
+                    $"[MixService]     Product: " +
+                    $"Packaged={product.IsPackaged}, " +
+                    $"Quality={product.Quality}");
+
+                if (product.IsPackaged)
+                {
+                    var packaging = product.AppliedPackaging;
+
+                    MelonLogger.Msg(
+                        $"[MixService]     Packaging: " +
+                        $"ID='{packaging.ID}', " +
+                        $"Name='{packaging.Name}', " +
+                        $"Capacity={packaging.Quantity}");
+                }
+            }
+        }
+
+        _depositAcknowledged = true;
 
         Messaging.SendTextMessage(
             "got it. i'll take it from here.",
