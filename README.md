@@ -2,6 +2,14 @@
 
 A beginner-friendly Schedule I mod template for [S1API.Forked](https://www.nuget.org/packages/S1API.Forked), MelonLoader, and Harmony. The project currently pins S1API.Forked 3.1.4.
 
+## Milo's mixing service
+
+Milo is a text-message contact. Select a discovered cocaine mix and an order of 1, 5, 10, or 20 bricks. He quotes $1,450 per brick ($29,000 for 20) and takes cash from the player's cash balance when **pay my cut** is selected. The product dead drop opens only after full payment. If the player cancels before Milo collects the product, he refunds the cash. The quoted fee, amount paid, and order state are saved with Milo's existing job.
+
+The product exchange remains one cocaine brick for one target-product brick, with the input quality preserved and a six-hour game-time processing period. Milo allows one active order. The wallet payment is isolated in `Mixing/MiloWalletPayment.cs` so a Milo-specific cash drop can replace it later.
+
+Run the focused economy checks with `dotnet run --project Tests/MixService.Economy.Tests.csproj`. In game, verify a 20-brick quote and cash debit, insufficient-cash retry, cancellation refund, save/load while awaiting payment and while awaiting deposit, and the existing six-hour pickup flow. The automated tests cover pricing and persisted job data; they do not exercise S1API or the game runtime.
+
 The default path is `CrossCompat`: one mod assembly that stays on S1API/MelonLoader abstractions and avoids direct `ScheduleOne` or `Il2CppScheduleOne` game types. Use `Mono` or `Il2cpp` only when your mod intentionally needs runtime-specific game assemblies.
 
 ## Quick Start
