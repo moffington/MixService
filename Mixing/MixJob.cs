@@ -5,7 +5,8 @@ public enum MixJobState
     Idle = 0,
     AwaitingDeposit = 1,
     Processing = 2,
-    ReadyForPickup = 3
+    ReadyForPickup = 3,
+    AwaitingPayment = 4
 }
 
 public sealed class MixJob
@@ -24,6 +25,12 @@ public sealed class MixJob
 
     public int PackageCapacity { get; set; }
     public int RequiredPackages { get; set; }
+
+    // Fixed at order creation; future price changes do not alter an existing quote.
+    public int QuotedFee { get; set; }
+    public int AmountPaid { get; set; }
+    public int RemainingBalance =>
+        System.Math.Max(0, QuotedFee - AmountPaid);
 
     public string InputQuality { get; set; } = "";
 
@@ -63,6 +70,8 @@ public sealed class MixJob
 
         PackageCapacity = 0;
         RequiredPackages = 0;
+        QuotedFee = 0;
+        AmountPaid = 0;
 
         InputQuality = "";
 
