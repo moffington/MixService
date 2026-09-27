@@ -75,6 +75,10 @@ public sealed class MixerContactNpc : NPC
 
         switch (_job.State)
         {
+            case MixJobState.AwaitingPayment:
+                SendPaymentQuote();
+                break;
+
             case MixJobState.AwaitingDeposit:
                 RestoreAwaitingDeposit();
                 break;
@@ -96,6 +100,12 @@ public sealed class MixerContactNpc : NPC
 
     private void PresentIdleMenu()
     {
+        if (_job.State != MixJobState.Idle)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
         var order = new Response
         {
             Label = "mixservice_new_order",
@@ -114,6 +124,12 @@ public sealed class MixerContactNpc : NPC
 
     private void PresentTargetMenu(int page)
     {
+        if (_job.State != MixJobState.Idle)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
         ProductDefinition[] targets =
             GetDiscoveredCocaineTargets();
 
@@ -244,6 +260,12 @@ public sealed class MixerContactNpc : NPC
         string targetProductId,
         string targetProductName)
     {
+        if (_job.State != MixJobState.Idle)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
         var responses =
             new List<Response>();
 
@@ -305,35 +327,18 @@ public sealed class MixerContactNpc : NPC
         string targetProductName,
         int requiredBricks)
     {
-        ReleaseReservedDrop();
-        ReleasePickupDrop();
-        DetachProcessingClock();
-
-        DeadDropInstance[] emptyDrops =
-            DeadDropManager.Empty;
-
-        if (emptyDrops.Length == 0)
+        // Old response buttons can remain visible in the phone conversation.
+        // Never let one replace an unpaid or in-progress job.
+        if (_job.State != MixJobState.Idle)
         {
-            Messaging.SendTextMessage(
-                "can't find a clean drop right now.",
-                responses: null,
-                responseDelay: 0f);
-
-            MelonLogger.Warning(
-                "No empty dead drops were available.");
-
-            PresentIdleMenu();
+            SendCurrentStatus();
             return;
         }
-
-        _reservedDrop =
-            emptyDrops[Random.Next(
-                emptyDrops.Length)];
 
         _job.Reset();
 
         _job.State =
-            MixJobState.AwaitingDeposit;
+            MixJobState.AwaitingPayment;
 
         _job.InputProductId =
             CocaineProductId;
@@ -359,29 +364,98 @@ public sealed class MixerContactNpc : NPC
         _job.RequiredPackages =
             requiredBricks;
 
-        _job.DeadDropGuid =
-            _reservedDrop.GUID;
-
-        AttachReservedDropListener();
-
-        string brickWord =
-            requiredBricks == 1
-                ? "brick"
-                : "bricks";
+        _job.QuotedFee = MixFeePolicy.Quote(
+            _job.PackagingId,
+            _job.PackageCapacity,
+            _job.RequiredPackages);
 
         MelonLogger.Msg(
-            $"Created order: " +
-            $"{requiredBricks} cocaine {brickWord} -> " +
-            $"'{targetProductName}' " +
-            $"at '{_reservedDrop.Name}' " +
+            $"Quoted order: {requiredBricks} cocaine bricks -> " +
+            $"'{targetProductName}' for ${_job.QuotedFee:N0}.");
+
+        SendPaymentQuote();
+    }
+
+    private void SendPaymentQuote()
+    {
+        if (_job.State != MixJobState.AwaitingPayment)
+            return;
+
+        var pay = new Response
+        {
+            Label = "mixservice_pay_order",
+            Text = $"pay ${_job.RemainingBalance:N0}"
+        };
+        pay.OnTriggered = PayForOrder;
+
+        string brickWord = _job.RequiredPackages == 1 ? "brick" : "bricks";
+        Messaging.SendTextMessage(
+            $"{_job.RequiredPackages} {brickWord} into " +
+            $"{_job.TargetProductName}? my cut's ${_job.QuotedFee:N0}. " +
+            $"you owe ${_job.RemainingBalance:N0} before i take the batch.",
+            new[] { pay, CreateCancelOrderResponse() },
+            responseDelay: 0f);
+    }
+
+    private void PayForOrder()
+    {
+        if (_job.State != MixJobState.AwaitingPayment)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
+        DeadDropInstance[] emptyDrops = DeadDropManager.Empty;
+        if (emptyDrops.Length == 0)
+        {
+            Messaging.SendTextMessage(
+                "can't find a clean drop right now. try me later.",
+                new[] { CreatePaymentRetryResponse(), CreateCancelOrderResponse() },
+                responseDelay: 0f);
+            return;
+        }
+
+        int balance = _job.RemainingBalance;
+        if (!MiloWalletPayment.TryCollect(balance, out string problem))
+        {
+            Messaging.SendTextMessage(
+                $"${balance:N0} cash first. {problem}.",
+                new[] { CreatePaymentRetryResponse(), CreateCancelOrderResponse() },
+                responseDelay: 0f);
+            return;
+        }
+
+        _job.AmountPaid += balance;
+        _reservedDrop = emptyDrops[Random.Next(emptyDrops.Length)];
+        _job.DeadDropGuid = _reservedDrop.GUID;
+        _job.State = MixJobState.AwaitingDeposit;
+        AttachReservedDropListener();
+
+        string brickWord = _job.RequiredPackages == 1 ? "brick" : "bricks";
+        MelonLogger.Msg(
+            $"Paid order: ${_job.AmountPaid:N0}; " +
+            $"{_job.RequiredPackages} cocaine {brickWord} -> " +
+            $"'{_job.TargetProductName}' at '{_reservedDrop.Name}' " +
             $"GUID={_reservedDrop.GUID}");
 
         Messaging.SendTextMessage(
-            $"drop {requiredBricks} cocaine {brickWord} " +
-            $"at {_reservedDrop.Name}. " +
-            $"{_reservedDrop.Description}. " +
+            $"got the ${_job.AmountPaid:N0}. drop " +
+            $"{_job.RequiredPackages} cocaine {brickWord} " +
+            $"at {_reservedDrop.Name}. {_reservedDrop.Description}. " +
             $"keep the whole batch the same quality.",
-            new[] { CreateCancelOrderResponse() });
+            new[] { CreateCancelOrderResponse() },
+            responseDelay: 0f);
+    }
+
+    private Response CreatePaymentRetryResponse()
+    {
+        var retry = new Response
+        {
+            Label = "mixservice_retry_payment",
+            Text = "pay my cut"
+        };
+        retry.OnTriggered = PayForOrder;
+        return retry;
     }
 
     private void RestoreAwaitingDeposit()
@@ -393,6 +467,8 @@ public sealed class MixerContactNpc : NPC
                 "Saved order had no dead-drop GUID. " +
                 "Cancelling it.");
 
+            if (!RefundUncollectedOrder())
+                return;
             _job.Reset();
             PresentIdleMenu();
             return;
@@ -409,6 +485,8 @@ public sealed class MixerContactNpc : NPC
                 $"'{_job.DeadDropGuid}'. " +
                 $"Cancelling saved order.");
 
+            if (!RefundUncollectedOrder())
+                return;
             _job.Reset();
 
             Messaging.SendTextMessage(
@@ -462,6 +540,9 @@ public sealed class MixerContactNpc : NPC
 
         if (_job.State !=
             MixJobState.AwaitingDeposit)
+            return;
+
+        if (_job.RemainingBalance > 0)
             return;
 
         if (_depositAcknowledged)
@@ -684,6 +765,10 @@ public sealed class MixerContactNpc : NPC
     {
         switch (_job.State)
         {
+            case MixJobState.AwaitingPayment:
+                SendPaymentQuote();
+                break;
+
             case MixJobState.Processing:
             {
                 int remaining =
@@ -1241,7 +1326,8 @@ public sealed class MixerContactNpc : NPC
     private void CancelOrder()
     {
         if (_job.State !=
-            MixJobState.AwaitingDeposit)
+            MixJobState.AwaitingDeposit &&
+            _job.State != MixJobState.AwaitingPayment)
         {
             SendCurrentStatus();
             return;
@@ -1249,6 +1335,9 @@ public sealed class MixerContactNpc : NPC
 
         string target =
             _job.TargetProductName;
+
+        if (!RefundUncollectedOrder())
+            return;
 
         ReleaseReservedDrop();
         DetachProcessingClock();
@@ -1275,6 +1364,21 @@ public sealed class MixerContactNpc : NPC
         Messaging.SendTextMessage(
             "cancelled.",
             new[] { startAgain });
+    }
+
+    private bool RefundUncollectedOrder()
+    {
+        if (MiloWalletPayment.TryRefund(
+                _job.AmountPaid, out string problem))
+            return true;
+
+        MelonLogger.Error(problem);
+        Messaging.SendTextMessage(
+            "can't settle your refund right now. " +
+            "the order's still on my books.",
+            new[] { CreateStatusResponse() },
+            responseDelay: 0f);
+        return false;
     }
 
     private void ReleaseReservedDrop()

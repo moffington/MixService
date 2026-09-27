@@ -50,6 +50,10 @@
     <PackageReference Include="S1API.Forked" Version="3.1.4" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="Tests/**/*.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(UseLocalMelonLoaderReferences)' != 'true'">
     <PackageReference Include="LavaGang.MelonLoader" Version="0.7.1" PrivateAssets="all" NoWarn="NU1701" />
     <PackageReference Include="HarmonyX" Version="2.15.0" PrivateAssets="all" />
