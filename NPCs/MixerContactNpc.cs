@@ -9,6 +9,7 @@ using S1API.GameTime;
 using S1API.Messaging;
 using S1API.Products;
 using S1API.Saveables;
+using S1API.Items;
 
 namespace MixService.NPCs;
 
@@ -33,11 +34,10 @@ public sealed class MixerContactNpc : NPC
     private bool _depositAcknowledged;
     private string? _lastRejectedDeposit;
 
-    private bool _processingClockAttached;
+    private DeadDropInstance? _pickupDrop;
+    private bool _pickupListenerAttached;
 
-    private bool _createdReady;
-    private bool _saveDataLoaded;
-    private bool _runtimeStateInitialized;
+    private bool _processingClockAttached;
 
     public override bool IsPhysical => false;
 
@@ -48,21 +48,11 @@ public sealed class MixerContactNpc : NPC
             firstName: "Milo",
             lastName: "");
     }
-
     protected override void OnCreated()
     {
         base.OnCreated();
 
         Instance = this;
-
-        /*
-        * base.OnCreated() is important here: for a custom NPC without
-        * an explicit icon, S1API generates/refreshes the contact mugshot
-        * during creation.
-        */
-        _createdReady = true;
-
-        TryInitializeRuntimeState();
     }
 
     protected override void OnLoaded()
@@ -70,44 +60,18 @@ public sealed class MixerContactNpc : NPC
         base.OnLoaded();
 
         _job ??= new MixJob();
-
-        /*
-        * Do NOT send messages directly from OnLoaded().
-        *
-        * Depending on lifecycle ordering, save data can be restored
-        * before the custom NPC has completed its creation path. Sending
-        * here can create a temporary/default conversation before Milo's
-        * final contact conversation and icon are ready.
-        */
-        _saveDataLoaded = true;
-
-        TryInitializeRuntimeState();
     }
 
-    private void TryInitializeRuntimeState()
+    public void InitializeAfterWorldLoad()
     {
-        /*
-        * We need BOTH:
-        *
-        * 1. the custom NPC creation path to have completed
-        * 2. our persisted MixJob to have been restored
-        *
-        * Whichever callback happens second performs initialization.
-        */
-        if (!_createdReady ||
-            !_saveDataLoaded ||
-            _runtimeStateInitialized)
-        {
-            return;
-        }
-
-        _runtimeStateInitialized = true;
+        _job ??= new MixJob();
 
         ReleaseReservedDrop();
+        ReleasePickupDrop();
         DetachProcessingClock();
 
         MelonLogger.Msg(
-            $"Initializing Milo runtime state: {_job.State}");
+            $"Initializing Milo after world load: {_job.State}");
 
         switch (_job.State)
         {
@@ -342,6 +306,7 @@ public sealed class MixerContactNpc : NPC
         int requiredBricks)
     {
         ReleaseReservedDrop();
+        ReleasePickupDrop();
         DetachProcessingClock();
 
         DeadDropInstance[] emptyDrops =
@@ -666,7 +631,7 @@ public sealed class MixerContactNpc : NPC
             $"got it. i'll have " +
             $"{_job.TargetProductName} " +
             $"ready in about six hours.",
-            responses: null,
+            new[] { CreateStatusResponse() },
             responseDelay: 0f);
     }
 
@@ -691,7 +656,7 @@ public sealed class MixerContactNpc : NPC
             $"still working on " +
             $"{_job.TargetProductName}. " +
             $"about {FormatDuration(remaining)} left.",
-            responses: null,
+            new[] { CreateStatusResponse() },
             responseDelay: 0f);
 
         MelonLogger.Msg(
@@ -701,17 +666,443 @@ public sealed class MixerContactNpc : NPC
             $"Remaining={remaining}m");
     }
 
-    private void RestoreReadyForPickup()
+    private Response CreateStatusResponse()
     {
-        Messaging.SendTextMessage(
-            $"{_job.TargetProductName} is done. " +
-            $"i'm holding it for you.",
-            responses: null,
-            responseDelay: 0f);
+        var status = new Response
+        {
+            Label = "mixservice_check_status",
+            Text = "check my batch"
+        };
+
+        status.OnTriggered =
+            SendCurrentStatus;
+
+        return status;
+    }
+
+    private void SendCurrentStatus()
+    {
+        switch (_job.State)
+        {
+            case MixJobState.Processing:
+            {
+                int remaining =
+                    Math.Max(
+                        0,
+                        _job.CompletesAtGameMinutes
+                        - GameClock.CurrentAbsoluteMinutes);
+
+                Messaging.SendTextMessage(
+                    $"still working on " +
+                    $"{_job.TargetProductName}. " +
+                    $"about {FormatDuration(remaining)} left.",
+                    new[] { CreateStatusResponse() },
+                    responseDelay: 0f);
+
+                break;
+            }
+
+            case MixJobState.ReadyForPickup:
+                EnsurePickupReady();
+                break;
+
+            case MixJobState.AwaitingDeposit:
+                Messaging.SendTextMessage(
+                    $"still waiting on " +
+                    $"{_job.RequiredPackages} cocaine " +
+                    $"{(_job.RequiredPackages == 1 ? "brick" : "bricks")}.",
+                    new[] { CreateCancelOrderResponse() },
+                    responseDelay: 0f);
+
+                break;
+
+            default:
+                PresentIdleMenu();
+                break;
+        }
+    }
+
+    private void EnsurePickupReady()
+    {
+        if (_job.State !=
+            MixJobState.ReadyForPickup)
+        {
+            return;
+        }
+
+        /*
+        * Output already exists from a previous session/save.
+        * Reconnect to the persisted pickup drop instead of
+        * manufacturing another batch.
+        */
+        if (_job.OutputSpawned)
+        {
+            if (string.IsNullOrWhiteSpace(
+                    _job.PickupDropGuid))
+            {
+                MelonLogger.Error(
+                    "Ready job says output was spawned " +
+                    "but has no pickup-drop GUID.");
+
+                return;
+            }
+
+            DeadDropInstance? existingDrop =
+                DeadDropManager.GetByGUID(
+                    _job.PickupDropGuid);
+
+            if (existingDrop == null)
+            {
+                MelonLogger.Error(
+                    $"Could not restore pickup drop " +
+                    $"'{_job.PickupDropGuid}'.");
+
+                Messaging.SendTextMessage(
+                    "something's wrong with the pickup. " +
+                    "don't place another order yet.",
+                    new[] { CreateStatusResponse() },
+                    responseDelay: 0f);
+
+                return;
+            }
+
+            AttachPickupDrop(existingDrop);
+
+            int remainingPackages =
+                CountMatchingPickupPackages(
+                    existingDrop);
+
+            /*
+            * If the save says output existed but it is no
+            * longer in the drop, the player already collected it.
+            */
+            if (remainingPackages <= 0)
+            {
+                CompletePickup();
+                return;
+            }
+
+            SendPickupReadyMessage(
+                existingDrop,
+                remainingPackages);
+
+            return;
+        }
+
+        DeadDropInstance? pickupDrop =
+            ResolvePickupDropForNewOutput();
+
+        if (pickupDrop == null)
+        {
+            MelonLogger.Warning(
+                "No empty dead drop available for completed order.");
+
+            Messaging.SendTextMessage(
+                $"{_job.TargetProductName} is done, " +
+                $"but i need a clean drop. check back.",
+                new[] { CreateStatusResponse() },
+                responseDelay: 0f);
+
+            return;
+        }
+
+        if (ItemManager.GetDefinition(
+                _job.TargetProductId)
+            is not ProductDefinition target)
+        {
+            MelonLogger.Error(
+                $"Could not resolve target product " +
+                $"'{_job.TargetProductId}'.");
+
+            return;
+        }
+
+        if (ItemManager.GetDefinition(
+                _job.PackagingId)
+            is not PackagingDefinition packaging)
+        {
+            MelonLogger.Error(
+                $"Could not resolve packaging " +
+                $"'{_job.PackagingId}'.");
+
+            return;
+        }
+
+        if (!PackagedProductFactory.TryCreate(
+                target,
+                packaging,
+                _job.RequiredPackages,
+                _job.InputQuality,
+                out ProductInstance? output,
+                out string problem))
+        {
+            MelonLogger.Error(
+                $"Could not create completed batch: {problem}");
+
+            Messaging.SendTextMessage(
+                "hit a problem packaging your batch. " +
+                "don't place another order yet.",
+                new[] { CreateStatusResponse() },
+                responseDelay: 0f);
+
+            return;
+        }
+
+        if (output == null)
+            return;
+
+        _job.PickupDropGuid =
+            pickupDrop.GUID;
+
+        /*
+        * Insert the one packaged product stack. Its quantity
+        * is RequiredPackages, so 1 means one brick and 10 means
+        * ten bricks in the stack.
+        */
+        pickupDrop.Storage.AddItem(output);
+
+        int insertedPackages =
+            CountMatchingPickupPackages(
+                pickupDrop);
+
+        if (insertedPackages !=
+            _job.RequiredPackages)
+        {
+            MelonLogger.Error(
+                $"Pickup verification failed at " +
+                $"'{pickupDrop.Name}': expected " +
+                $"{_job.RequiredPackages} package(s), found " +
+                $"{insertedPackages}.");
+
+            /*
+            * If anything was inserted, mark it spawned so
+            * a retry cannot duplicate product.
+            */
+            if (insertedPackages > 0)
+            {
+                _job.OutputSpawned = true;
+                AttachPickupDrop(pickupDrop);
+            }
+
+            return;
+        }
+
+        _job.OutputSpawned = true;
+
+        AttachPickupDrop(pickupDrop);
 
         MelonLogger.Msg(
-            $"Restored ready order for " +
-            $"'{_job.TargetProductName}'.");
+            $"Spawned completed order: " +
+            $"{_job.RequiredPackages}x " +
+            $"{_job.InputQuality} " +
+            $"{_job.TargetProductName} " +
+            $"{_job.PackagingName} " +
+            $"at '{pickupDrop.Name}' " +
+            $"GUID={pickupDrop.GUID}");
+
+        SendPickupReadyMessage(
+            pickupDrop,
+            insertedPackages);
+    }
+
+    private DeadDropInstance?
+        ResolvePickupDropForNewOutput()
+    {
+        /*
+        * Prefer the original handoff drop. It gives the whole
+        * exchange a nice "same spot" feel and avoids unnecessary
+        * map hopping.
+        */
+        if (!string.IsNullOrWhiteSpace(
+                _job.DeadDropGuid))
+        {
+            DeadDropInstance? original =
+                DeadDropManager.GetByGUID(
+                    _job.DeadDropGuid);
+
+            if (original != null &&
+                original.IsEmpty)
+            {
+                return original;
+            }
+        }
+
+        /*
+        * Someone/native gameplay occupied it while Milo was
+        * working, so choose another clean drop instead.
+        */
+        DeadDropInstance[] emptyDrops =
+            DeadDropManager.Empty;
+
+        if (emptyDrops.Length == 0)
+            return null;
+
+        return emptyDrops[
+            Random.Next(emptyDrops.Length)];
+    }
+
+    private int CountMatchingPickupPackages(
+        DeadDropInstance drop)
+    {
+        int total = 0;
+
+        foreach (ProductDeposit deposit
+                in DepositInspector.Inspect(
+                    drop.Storage))
+        {
+            if (!string.Equals(
+                    deposit.ProductId,
+                    _job.TargetProductId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                    deposit.PackagingId,
+                    _job.PackagingId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                    deposit.Quality,
+                    _job.InputQuality,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (deposit.PackageCapacity !=
+                _job.PackageCapacity)
+            {
+                continue;
+            }
+
+            total +=
+                deposit.StackQuantity;
+        }
+
+        return total;
+    }
+
+    private void SendPickupReadyMessage(
+        DeadDropInstance drop,
+        int packageCount)
+    {
+        string packageWord =
+            packageCount == 1
+                ? _job.PackagingName.ToLowerInvariant()
+                : _job.PackagingName.ToLowerInvariant() + "s";
+
+        Messaging.SendTextMessage(
+            $"{_job.TargetProductName} is done. " +
+            $"left {packageCount} " +
+            $"{_job.InputQuality.ToLowerInvariant()} " +
+            $"{packageWord} at {drop.Name}. " +
+            $"{drop.Description}",
+            new[] { CreateStatusResponse() },
+            responseDelay: 0f);
+    }
+
+    private void AttachPickupDrop(
+        DeadDropInstance drop)
+    {
+        ReleasePickupDrop();
+
+        _pickupDrop = drop;
+
+        _pickupDrop.Storage.OnContentsChanged +=
+            OnPickupContentsChanged;
+
+        _pickupListenerAttached = true;
+    }
+
+    private void ReleasePickupDrop()
+    {
+        if (_pickupDrop != null &&
+            _pickupListenerAttached)
+        {
+            _pickupDrop.Storage.OnContentsChanged -=
+                OnPickupContentsChanged;
+        }
+
+        _pickupDrop = null;
+        _pickupListenerAttached = false;
+    }
+
+    private void OnPickupContentsChanged()
+    {
+        if (_pickupDrop == null)
+            return;
+
+        if (_job.State !=
+            MixJobState.ReadyForPickup)
+        {
+            return;
+        }
+
+        if (!_job.OutputSpawned)
+            return;
+
+        int remaining =
+            CountMatchingPickupPackages(
+                _pickupDrop);
+
+        if (remaining > 0)
+        {
+            MelonLogger.Msg(
+                $"Pickup partially collected; " +
+                $"{remaining} package(s) remain.");
+
+            return;
+        }
+
+        CompletePickup();
+    }
+
+    private void CompletePickup()
+    {
+        string target =
+            _job.TargetProductName;
+
+        int packageCount =
+            _job.RequiredPackages;
+
+        ReleasePickupDrop();
+        ReleaseReservedDrop();
+        DetachProcessingClock();
+
+        _job.Reset();
+
+        MelonLogger.Msg(
+            $"Pickup completed: " +
+            $"{packageCount}x '{target}' collected.");
+
+        var another = new Response
+        {
+            Label =
+                "mixservice_after_pickup_new_order",
+
+            Text =
+                "got another batch"
+        };
+
+        another.OnTriggered = () =>
+        {
+            PresentTargetMenu(0);
+        };
+
+        Messaging.SendTextMessage(
+            "all yours. hit me up when you need another one.",
+            new[] { another },
+            responseDelay: 0f);
+    }
+
+    private void RestoreReadyForPickup()
+    {
+        EnsurePickupReady();
     }
 
     private void AttachProcessingClock()
@@ -784,15 +1175,7 @@ public sealed class MixerContactNpc : NPC
             $"Now={now}, " +
             $"Deadline={_job.CompletesAtGameMinutes}");
 
-        /*
-         * Output creation comes next pass.
-         * For now this proves the persistent timer/state machine.
-         */
-        Messaging.SendTextMessage(
-            $"{_job.TargetProductName} is done. " +
-            $"i'm holding it for you.",
-            responses: null,
-            responseDelay: 0f);
+        EnsurePickupReady();
 
         return true;
     }
@@ -857,6 +1240,13 @@ public sealed class MixerContactNpc : NPC
 
     private void CancelOrder()
     {
+        if (_job.State !=
+            MixJobState.AwaitingDeposit)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
         string target =
             _job.TargetProductName;
 
@@ -904,6 +1294,7 @@ public sealed class MixerContactNpc : NPC
     protected override void OnDestroyed()
     {
         ReleaseReservedDrop();
+        ReleasePickupDrop();
         DetachProcessingClock();
 
         if (ReferenceEquals(Instance, this))
