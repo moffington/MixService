@@ -1,4 +1,5 @@
 using MixService.Mixing;
+using MixService.Tests;
 using System.Text.Json;
 
 static void Equal(int expected, int actual, string label)
@@ -50,5 +51,7 @@ var legacy = new MixJob
 legacy.RestoreAssignedDrop();
 if (legacy.AssignedDrop != "legacy-drop")
     throw new Exception("legacy drop was not migrated");
+
+DialogueTests.Run();
 
 Console.WriteLine("Economy tests passed.");

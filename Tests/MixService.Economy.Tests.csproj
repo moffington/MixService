@@ -8,5 +8,7 @@
   <ItemGroup>
     <Compile Include="../Mixing/MixFeePolicy.cs" Link="MixFeePolicy.cs" />
     <Compile Include="../Mixing/MixJob.cs" Link="MixJob.cs" />
+    <Compile Include="../Mixing/MiloPaymentFailure.cs" Link="MiloPaymentFailure.cs" />
+    <Compile Include="../Dialogue/*.cs" LinkBase="Dialogue" />
   </ItemGroup>
 </Project>

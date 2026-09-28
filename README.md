@@ -106,6 +106,17 @@ MixService/
 |       |-- schedule-one-modding/
 |       `-- schedule-one-custom-npcs/
 |-- Core.cs
+|-- Dialogue/
+|   |-- MiloDialogueBank.cs   <- all of Milo's text; add lines here
+|   |-- MiloDialogue.cs
+|   |-- MiloIntent.cs
+|   |-- MiloLineFacts.cs
+|   |-- MiloBank.cs
+|   |-- MiloLineFormatter.cs
+|   `-- MiloRepeatGuard.cs
+|-- Mixing/
+|-- NPCs/
+|-- Tests/
 |-- Utils/
 |   `-- Constants.cs
 |-- example.build.props
@@ -125,6 +136,7 @@ They are development guidance only. They are not compiled into the mod DLL and s
 
 ## Where To Put Code
 
+- Add or change what Milo says in `Dialogue/MiloDialogueBank.cs`. It is grouped by intent, so appending a line to the right tier is the whole job. Lines are capped at 20 words, button labels hold exactly one line each, and `Tests/DialogueTests.cs` fails if a line has an unfilled fact, a speech-length line, a subject-verb disagreement, a repeated drop name, or a composed message that grew too long.
 - Use `GameLifecycle.OnPreLoad` for stable content definitions that save deserialization must resolve.
 - Use `GameLifecycle.OnLoadComplete` for systems that need the loaded world, managers, or player state.
 - Put IDs, version strings, config names, and log tags in `Utils/Constants.cs`.

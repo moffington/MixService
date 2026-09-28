@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using MelonLoader;
+using MixService.Dialogue;
 using MixService.Mixing;
 using S1API.DeadDrops;
 using S1API.Entities;
@@ -30,7 +31,15 @@ public sealed class MixerContactNpc : NPC
 
     private DeadDropInstance? _reservedDrop;
     private bool _depositAcknowledged;
-    private string? _lastRejectedDeposit;
+    private MiloRepeatGuard _rejectionGuard = new MiloRepeatGuard();
+
+    /*
+     * Whether Milo has already put the current drop in front of the player
+     * for this order. Once true, follow-up messages talk about "the drop" or
+     * "same spot" instead of repeating a location the player already has.
+     */
+    private bool _depositLocationKnown;
+    private bool _pickupLocationKnown;
 
     private DeadDropInstance? _pickupDrop;
     private bool _pickupListenerAttached;
@@ -66,6 +75,13 @@ public sealed class MixerContactNpc : NPC
         _job ??= new MixJob();
         _job.RestoreAssignedDrop();
 
+        /*
+         * A fresh session has told the player nothing about either drop, so
+         * the first message after loading names its location again.
+         */
+        _depositLocationKnown = false;
+        _pickupLocationKnown = false;
+
         ReleaseReservedDrop();
         ReleasePickupDrop();
         DetachProcessingClock();
@@ -98,6 +114,112 @@ public sealed class MixerContactNpc : NPC
         }
     }
 
+    // ---------------------------------------------------------------
+    // Dialogue
+    //
+    // Order logic above decides what is true; everything below just hands
+    // those facts to the dialogue layer and sends whatever comes back.
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Facts every order line may need, read straight off the current job.
+    /// </summary>
+    private MiloLineFacts JobFacts()
+    {
+        return new MiloLineFacts
+        {
+            ProductName = _job.TargetProductName,
+            BrickCount = _job.RequiredPackages,
+            Fee = _job.QuotedFee,
+            Due = _job.RemainingBalance,
+            Quality = _job.InputQuality,
+            Packaging = _job.PackagingName,
+            PackageCount = _job.RequiredPackages,
+            Payment = _job.RemainingBalance <= 0
+                ? MiloPaymentState.Paid
+                : _job.AmountPaid > 0
+                    ? MiloPaymentState.Partial
+                    : MiloPaymentState.Unpaid,
+            ProductCollected =
+                _job.State == MixJobState.Processing ||
+                _job.State == MixJobState.ReadyForPickup
+        };
+    }
+
+    private MiloLineFacts DepositFacts(
+        DeadDropInstance? drop)
+    {
+        MiloLineFacts facts = JobFacts();
+
+        /*
+         * Whether the line may name the drop is decided by LocationKnown, so
+         * the location is simply available and the bank picks.
+         */
+        facts.LocationKnown = _depositLocationKnown;
+        facts.DropLocation = drop != null
+            ? FormatDropLocation(drop)
+            : string.Empty;
+
+        return facts;
+    }
+
+    private MiloLineFacts PickupFacts(DeadDropInstance drop)
+    {
+        MiloLineFacts facts = JobFacts();
+
+        facts.LocationKnown = _pickupLocationKnown;
+        facts.SameSpotAsDeposit = !string.IsNullOrWhiteSpace(
+                _job.AssignedDrop) &&
+            string.Equals(
+                _job.AssignedDrop,
+                drop.GUID,
+                StringComparison.OrdinalIgnoreCase);
+        facts.DropLocation = FormatDropLocation(drop);
+
+        return facts;
+    }
+
+    private static Response Button(
+        MiloIntent intent,
+        Action onTriggered,
+        string label)
+    {
+        var response = new Response
+        {
+            Label = label,
+
+            // Label, not Line: button text is deterministic and must not
+            // touch the latch that keeps Milo's messages from repeating.
+            Text = MiloDialogue.Label(
+                intent,
+                new MiloLineFacts())
+        };
+
+        response.OnTriggered = onTriggered;
+
+        return response;
+    }
+
+    private static Response QuantityButton(
+        int quantity,
+        Action<int> onTriggered)
+    {
+        var response = new Response
+        {
+            Label = $"mixservice_qty_{quantity}",
+            Text = MiloDialogue.Label(
+                MiloIntent.ButtonQuantity,
+                new MiloLineFacts
+                {
+                    BrickCount = quantity
+                })
+        };
+
+        response.OnTriggered = () => onTriggered(quantity);
+
+        return response;
+    }
+
     private void PresentIdleMenu()
     {
         if (_job.State != MixJobState.Idle)
@@ -106,20 +228,21 @@ public sealed class MixerContactNpc : NPC
             return;
         }
 
-        var order = new Response
-        {
-            Label = "mixservice_new_order",
-            Text = "need a batch mixed"
-        };
-
-        order.OnTriggered = () =>
-        {
-            PresentTargetMenu(0);
-        };
+        var order = Button(
+            MiloIntent.ButtonNewOrder,
+            PresentTargetMenuPageZero,
+            "mixservice_new_order");
 
         Messaging.SendTextMessage(
-            "yo. need something?",
+            MiloDialogue.Line(
+                MiloIntent.Greeting,
+                new MiloLineFacts()),
             new[] { order });
+    }
+
+    private void PresentTargetMenuPageZero()
+    {
+        PresentTargetMenu(0);
     }
 
     private void PresentTargetMenu(int page)
@@ -135,16 +258,15 @@ public sealed class MixerContactNpc : NPC
 
         if (targets.Length == 0)
         {
-            var retry = new Response
-            {
-                Label = "mixservice_no_targets_retry",
-                Text = "never mind"
-            };
-
-            retry.OnTriggered = PresentIdleMenu;
+            var retry = Button(
+                MiloIntent.ButtonNeverMind,
+                PresentIdleMenu,
+                "mixservice_no_targets_retry");
 
             Messaging.SendTextMessage(
-                "you don't have any cocaine mixes figured out yet.",
+                MiloDialogue.Line(
+                    MiloIntent.NoTargetsDiscovered,
+                    new MiloLineFacts()),
                 new[] { retry });
 
             return;
@@ -205,39 +327,23 @@ public sealed class MixerContactNpc : NPC
             int nextPage =
                 (page + 1) % pageCount;
 
-            var more = new Response
-            {
-                Label =
-                    $"mixservice_target_more_{page}",
-
-                Text =
-                    "more..."
-            };
-
-            more.OnTriggered = () =>
-            {
-                PresentTargetMenu(nextPage);
-            };
-
-            responses.Add(more);
+            responses.Add(
+                Button(
+                    MiloIntent.ButtonMore,
+                    () => PresentTargetMenu(nextPage),
+                    $"mixservice_target_more_{page}"));
         }
 
-        var cancel = new Response
-        {
-            Label =
-                $"mixservice_target_cancel_{page}",
-
-            Text =
-                "never mind"
-        };
-
-        cancel.OnTriggered =
-            PresentIdleMenu;
-
-        responses.Add(cancel);
+        responses.Add(
+            Button(
+                MiloIntent.ButtonNeverMind,
+                PresentIdleMenu,
+                $"mixservice_target_cancel_{page}"));
 
         Messaging.SendTextMessage(
-            "what're we making?",
+            MiloDialogue.Line(
+                MiloIntent.TargetPrompt,
+                new MiloLineFacts()),
             responses.ToArray());
     }
 
@@ -279,46 +385,28 @@ public sealed class MixerContactNpc : NPC
 
         foreach (int quantity in quantities)
         {
-            int capturedQuantity =
-                quantity;
-
-            var response = new Response
-            {
-                Label =
-                    $"mixservice_qty_{capturedQuantity}",
-
-                Text =
-                    capturedQuantity == 1
-                        ? "1 brick"
-                        : $"{capturedQuantity} bricks"
-            };
-
-            response.OnTriggered = () =>
-            {
-                CreateOrder(
-                    targetProductId,
-                    targetProductName,
-                    capturedQuantity);
-            };
-
-            responses.Add(response);
+            responses.Add(
+                QuantityButton(
+                    quantity,
+                    selected => CreateOrder(
+                        targetProductId,
+                        targetProductName,
+                        selected)));
         }
 
-        var back = new Response
-        {
-            Label = "mixservice_qty_back",
-            Text = "different mix"
-        };
-
-        back.OnTriggered = () =>
-        {
-            PresentTargetMenu(0);
-        };
-
-        responses.Add(back);
+        responses.Add(
+            Button(
+                MiloIntent.ButtonDifferentMix,
+                PresentTargetMenuPageZero,
+                "mixservice_qty_back"));
 
         Messaging.SendTextMessage(
-            $"how much {targetProductName}?",
+            MiloDialogue.Line(
+                MiloIntent.QuantityPrompt,
+                new MiloLineFacts
+                {
+                    ProductName = targetProductName
+                }),
             responses.ToArray());
     }
 
@@ -341,7 +429,9 @@ public sealed class MixerContactNpc : NPC
         if (assignedDrop == null)
         {
             Messaging.SendTextMessage(
-                "can't find a clean drop right now. try me later.",
+                MiloDialogue.Line(
+                    MiloIntent.NoDropForNewOrder,
+                    new MiloLineFacts()),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
             return;
@@ -352,6 +442,13 @@ public sealed class MixerContactNpc : NPC
         _job.State = MixJobState.AwaitingDeposit;
         _job.AssignedDrop = assignedDrop.GUID;
         _reservedDrop = assignedDrop;
+
+        /*
+         * A fresh order has told the player nothing yet, so the first
+         * message has to name its drop.
+         */
+        _depositLocationKnown = false;
+        _pickupLocationKnown = false;
 
         _job.InputProductId =
             CocaineProductId;
@@ -401,15 +498,9 @@ public sealed class MixerContactNpc : NPC
         string brickWord =
             _job.RequiredPackages == 1 ? "brick" : "bricks";
 
-        string payment = _job.RemainingBalance > 0
-            ? _job.AmountPaid > 0
-                ? $"my cut's ${_job.QuotedFee:N0} total; " +
-                  $"${_job.RemainingBalance:N0} remains due " +
-                  "when i collect it. "
-                : $"my cut's ${_job.QuotedFee:N0}, " +
-                  "due when i collect it. "
-            : $"my cut's ${_job.QuotedFee:N0}, " +
-              "already paid. ";
+        MiloLineFacts facts =
+            DepositFacts(
+                _reservedDrop);
 
         MelonLogger.Msg(
             $"Assigned order: ${_job.QuotedFee:N0} quoted; " +
@@ -418,12 +509,13 @@ public sealed class MixerContactNpc : NPC
             $"GUID={_reservedDrop.GUID}");
 
         Messaging.SendTextMessage(
-            $"{payment}drop " +
-            $"{_job.RequiredPackages} cocaine {brickWord} " +
-            $"at {FormatDropLocation(_reservedDrop)}. " +
-            $"keep the whole batch the same quality.",
+            MiloDialogue.DepositBriefing(facts),
             new[] { CreateCancelOrderResponse() },
             responseDelay: 0f);
+
+        // The player now has the drop; every later line for this order can
+        // refer back to it instead of spelling it out again.
+        _depositLocationKnown = true;
     }
 
     private void RestoreLegacyAwaitingPayment()
@@ -434,7 +526,9 @@ public sealed class MixerContactNpc : NPC
         if (assignedDrop == null)
         {
             Messaging.SendTextMessage(
-                "need a clean drop for your order. check back soon.",
+                MiloDialogue.Line(
+                    MiloIntent.NoDropForRestoredOrder,
+                    new MiloLineFacts()),
                 new[] { CreateStatusResponse(), CreateCancelOrderResponse() },
                 responseDelay: 0f);
             return;
@@ -479,7 +573,9 @@ public sealed class MixerContactNpc : NPC
             _job.Reset();
 
             Messaging.SendTextMessage(
-                "lost the drop. we'll have to start that one over.",
+                MiloDialogue.Line(
+                    MiloIntent.LostDrop,
+                    new MiloLineFacts()),
                 responses: null,
                 responseDelay: 0f);
 
@@ -492,10 +588,14 @@ public sealed class MixerContactNpc : NPC
         if (_job.PaymentNeedsReview)
         {
             Messaging.SendTextMessage(
-                $"the cash change for this order needs review. " +
-                $"the assigned drop is {_reservedDrop.Name}.",
+                MiloDialogue.Line(
+                    MiloIntent.PaymentNeedsReview,
+                    DepositFacts(
+                        _reservedDrop)),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
+
+            _depositLocationKnown = true;
             return;
         }
 
@@ -511,13 +611,11 @@ public sealed class MixerContactNpc : NPC
             $"at '{_reservedDrop.Name}'");
 
         Messaging.SendTextMessage(
-            $"still waiting on " +
-            $"{_job.RequiredPackages} cocaine {brickWord} " +
-            $"at {_reservedDrop.Name}. " +
-            (_job.RemainingBalance > 0
-                ? $"${_job.RemainingBalance:N0} due when i collect it."
-                : "your cut's paid."),
+            MiloDialogue.DepositStatus(
+                DepositFacts(_reservedDrop)),
             new[] { CreateStatusResponse(), CreateCancelOrderResponse() });
+
+        _depositLocationKnown = true;
 
         if (!_reservedDrop.IsEmpty)
             OnDropContentsChanged();
@@ -529,7 +627,7 @@ public sealed class MixerContactNpc : NPC
             return;
 
         _depositAcknowledged = false;
-        _lastRejectedDeposit = null;
+        _rejectionGuard.Clear();
 
         _reservedDrop.Storage.OnContentsChanged +=
             OnDropContentsChanged;
@@ -552,7 +650,7 @@ public sealed class MixerContactNpc : NPC
 
         if (_reservedDrop.IsEmpty)
         {
-            _lastRejectedDeposit = null;
+            _rejectionGuard.Clear();
             return;
         }
 
@@ -638,8 +736,10 @@ public sealed class MixerContactNpc : NPC
         if (_job.PaymentNeedsReview)
         {
             Messaging.SendTextMessage(
-                "the cash change for this order needs review. " +
-                "i've left your product in the drop.",
+                MiloDialogue.Line(
+                    MiloIntent.PaymentNeedsReview,
+                    DepositFacts(
+                        drop)),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
             return;
@@ -661,12 +761,25 @@ public sealed class MixerContactNpc : NPC
             if (!MiloWalletPayment.TryCharge(
                     chargedNow,
                     out string paymentProblem,
-                    out bool paymentNeedsReview))
+                    out bool paymentNeedsReview,
+                    out MiloPaymentFailure paymentFailure))
             {
                 _job.PaymentNeedsReview = paymentNeedsReview;
+
+                MiloLineFacts facts =
+                    DepositFacts(
+                        drop);
+
+                facts.Failure = paymentFailure;
+
                 Messaging.SendTextMessage(
-                    $"can't collect the batch yet. {paymentProblem}. " +
-                    $"your product's still at {drop.Name}.",
+                    paymentNeedsReview
+                        ? MiloDialogue.Line(
+                            MiloIntent.PaymentNeedsReview,
+                            facts)
+                        : MiloDialogue.Line(
+                            MiloIntent.CollectionFailed,
+                            facts),
                     paymentNeedsReview
                         ? new[] { CreateStatusResponse() }
                         : new[] { CreateStatusResponse(), CreateCancelOrderResponse() },
@@ -687,7 +800,7 @@ public sealed class MixerContactNpc : NPC
             OnDropContentsChanged;
 
         _depositAcknowledged = true;
-        _lastRejectedDeposit = null;
+        _rejectionGuard.Clear();
 
         if (!DepositInspector.TryRemoveExactBatch(
                 drop.Storage,
@@ -710,7 +823,8 @@ public sealed class MixerContactNpc : NPC
                     if (MiloWalletPayment.TryRefund(
                             chargedNow,
                             out string refundProblem,
-                            out bool refundNeedsReview))
+                            out bool refundNeedsReview,
+                            out MiloPaymentFailure refundFailure))
                     {
                         _job.AmountPaid -= chargedNow;
                     }
@@ -761,6 +875,9 @@ public sealed class MixerContactNpc : NPC
         _job.State =
             MixJobState.Processing;
 
+        _depositLocationKnown = true;
+        _pickupLocationKnown = false;
+
         AttachProcessingClock();
 
         MelonLogger.Msg(
@@ -774,11 +891,30 @@ public sealed class MixerContactNpc : NPC
             $"Complete={_job.CompletesAtGameMinutes}");
 
         Messaging.SendTextMessage(
-            $"got it. i'll have " +
-            $"{_job.TargetProductName} " +
-            $"ready in about six hours.",
+            MiloDialogue.Line(
+                MiloIntent.ProcessingStarted,
+                ProcessingFacts(ProcessingDurationMinutes)),
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
+    }
+
+    /// <summary>
+    /// Facts for the two "it is on my bench" messages. The product name is
+    /// mandatory there; the clock wording comes from the one duration
+    /// constant so the two messages can never disagree.
+    /// </summary>
+    private MiloLineFacts ProcessingFacts(
+        int remainingMinutes)
+    {
+        MiloLineFacts facts = JobFacts();
+
+        facts.Duration = MiloDialogue.DescribeDuration(
+            ProcessingDurationMinutes);
+
+        facts.TimeLeft = MiloDialogue.DescribeDuration(
+            remainingMinutes);
+
+        return facts;
     }
 
     private void RestoreProcessing()
@@ -799,9 +935,9 @@ public sealed class MixerContactNpc : NPC
                 - GameClock.CurrentAbsoluteMinutes);
 
         Messaging.SendTextMessage(
-            $"still working on " +
-            $"{_job.TargetProductName}. " +
-            $"about {FormatDuration(remaining)} left.",
+            MiloDialogue.Line(
+                MiloIntent.ProcessingStatus,
+                ProcessingFacts(remaining)),
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
 
@@ -814,16 +950,10 @@ public sealed class MixerContactNpc : NPC
 
     private Response CreateStatusResponse()
     {
-        var status = new Response
-        {
-            Label = "mixservice_check_status",
-            Text = "check my batch"
-        };
-
-        status.OnTriggered =
-            SendCurrentStatus;
-
-        return status;
+        return Button(
+            MiloIntent.ButtonCheckStatus,
+            SendCurrentStatus,
+            "mixservice_check_status");
     }
 
     private void SendCurrentStatus()
@@ -843,9 +973,9 @@ public sealed class MixerContactNpc : NPC
                         - GameClock.CurrentAbsoluteMinutes);
 
                 Messaging.SendTextMessage(
-                    $"still working on " +
-                    $"{_job.TargetProductName}. " +
-                    $"about {FormatDuration(remaining)} left.",
+                    MiloDialogue.Line(
+                        MiloIntent.ProcessingStatus,
+                        ProcessingFacts(remaining)),
                     new[] { CreateStatusResponse() },
                     responseDelay: 0f);
 
@@ -860,8 +990,10 @@ public sealed class MixerContactNpc : NPC
                 if (_job.PaymentNeedsReview)
                 {
                     Messaging.SendTextMessage(
-                        "the cash change for this order needs review. " +
-                        "i've left your product in the assigned drop.",
+                        MiloDialogue.Line(
+                            MiloIntent.PaymentNeedsReview,
+                            DepositFacts(
+                                _reservedDrop)),
                         new[] { CreateStatusResponse() },
                         responseDelay: 0f);
                     break;
@@ -876,13 +1008,8 @@ public sealed class MixerContactNpc : NPC
                 }
 
                 Messaging.SendTextMessage(
-                    $"still waiting on " +
-                    $"{_job.RequiredPackages} cocaine " +
-                    $"{(_job.RequiredPackages == 1 ? "brick" : "bricks")} " +
-                    $"at {_reservedDrop?.Name ?? "your assigned drop"}. " +
-                    (_job.RemainingBalance > 0
-                        ? $"${_job.RemainingBalance:N0} due on collection."
-                        : "your cut's paid."),
+                    MiloDialogue.DepositStatus(
+                        DepositFacts(_reservedDrop)),
                     new[] { CreateStatusResponse(), CreateCancelOrderResponse() },
                     responseDelay: 0f);
 
@@ -930,8 +1057,9 @@ public sealed class MixerContactNpc : NPC
                     $"'{_job.PickupDropGuid}'.");
 
                 Messaging.SendTextMessage(
-                    "something's wrong with the pickup. " +
-                    "don't place another order yet.",
+                    MiloDialogue.Line(
+                        MiloIntent.PickupBroken,
+                        JobFacts()),
                     new[] { CreateStatusResponse() },
                     responseDelay: 0f);
 
@@ -970,8 +1098,9 @@ public sealed class MixerContactNpc : NPC
                 "No empty dead drop available for completed order.");
 
             Messaging.SendTextMessage(
-                $"{_job.TargetProductName} is done, " +
-                $"but i need a clean drop. check back.",
+                MiloDialogue.Line(
+                    MiloIntent.PickupDropUnavailable,
+                    JobFacts()),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
 
@@ -1012,8 +1141,9 @@ public sealed class MixerContactNpc : NPC
                 $"Could not create completed batch: {problem}");
 
             Messaging.SendTextMessage(
-                "hit a problem packaging your batch. " +
-                "don't place another order yet.",
+                MiloDialogue.Line(
+                    MiloIntent.PackagingFailed,
+                    JobFacts()),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
 
@@ -1156,18 +1286,21 @@ public sealed class MixerContactNpc : NPC
         DeadDropInstance drop,
         int packageCount)
     {
-        string packageWord =
-            packageCount == 1
-                ? _job.PackagingName.ToLowerInvariant()
-                : _job.PackagingName.ToLowerInvariant() + "s";
+        MiloLineFacts facts =
+            PickupFacts(drop);
+
+        facts.PackageCount = packageCount;
 
         Messaging.SendTextMessage(
-            $"{_job.TargetProductName} is done. " +
-            $"left {packageCount} " +
-            $"{_job.InputQuality.ToLowerInvariant()} " +
-            $"{packageWord} at {FormatDropLocation(drop)}.",
+            MiloDialogue.Line(
+                MiloIntent.PickupReady,
+                facts),
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
+
+        // From now on the player knows where the finished batch is, so repeat
+        // status messages can say "the drop" instead of naming it again.
+        _pickupLocationKnown = true;
     }
 
     private static string FormatDropLocation(
@@ -1228,6 +1361,20 @@ public sealed class MixerContactNpc : NPC
     private void AttachPickupDrop(
         DeadDropInstance drop)
     {
+        /*
+         * Reattaching the same drop on every status check must not forget that
+         * the player has already been told where it is. Compare GUIDs, not
+         * object identity, because a lookup can hand back a fresh wrapper.
+         */
+        if (_pickupDrop == null ||
+            !string.Equals(
+                _pickupDrop.GUID,
+                drop.GUID,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _pickupLocationKnown = false;
+        }
+
         ReleasePickupDrop();
 
         _pickupDrop = drop;
@@ -1299,22 +1446,15 @@ public sealed class MixerContactNpc : NPC
             $"Pickup completed: " +
             $"{packageCount}x '{target}' collected.");
 
-        var another = new Response
-        {
-            Label =
-                "mixservice_after_pickup_new_order",
-
-            Text =
-                "got another batch"
-        };
-
-        another.OnTriggered = () =>
-        {
-            PresentTargetMenu(0);
-        };
+        var another = Button(
+            MiloIntent.ButtonAfterPickup,
+            PresentTargetMenuPageZero,
+            "mixservice_after_pickup_new_order");
 
         Messaging.SendTextMessage(
-            "all yours. hit me up when you need another one.",
+            MiloDialogue.Line(
+                MiloIntent.PickupComplete,
+                JobFacts()),
             new[] { another },
             responseDelay: 0f);
     }
@@ -1399,27 +1539,6 @@ public sealed class MixerContactNpc : NPC
         return true;
     }
 
-    private static string FormatDuration(
-        int totalMinutes)
-    {
-        totalMinutes =
-            Math.Max(0, totalMinutes);
-
-        int hours =
-            totalMinutes / 60;
-
-        int minutes =
-            totalMinutes % 60;
-
-        if (hours <= 0)
-            return $"{minutes}m";
-
-        if (minutes == 0)
-            return $"{hours}h";
-
-        return $"{hours}h {minutes}m";
-    }
-
     private void RejectDeposit(string problem)
     {
         if (_reservedDrop == null)
@@ -1429,32 +1548,18 @@ public sealed class MixerContactNpc : NPC
             $"Deposit at '{_reservedDrop.Name}' " +
             $"not accepted: {problem}";
 
-        if (string.Equals(
-                rejection,
-                _lastRejectedDeposit,
-                StringComparison.Ordinal))
-        {
+        if (!_rejectionGuard.ShouldEmit(rejection))
             return;
-        }
-
-        _lastRejectedDeposit =
-            rejection;
 
         MelonLogger.Warning(rejection);
     }
 
     private Response CreateCancelOrderResponse()
     {
-        var cancel = new Response
-        {
-            Label = "mixservice_cancel_order",
-            Text = "cancel it"
-        };
-
-        cancel.OnTriggered =
-            CancelOrder;
-
-        return cancel;
+        return Button(
+            MiloIntent.ButtonCancelOrder,
+            CancelOrder,
+            "mixservice_cancel_order");
     }
 
     private void CancelOrder()
@@ -1481,22 +1586,15 @@ public sealed class MixerContactNpc : NPC
         MelonLogger.Msg(
             $"Cancelled order for '{target}'.");
 
-        var startAgain = new Response
-        {
-            Label =
-                "mixservice_after_cancel_new_order",
-
-            Text =
-                "set up another"
-        };
-
-        startAgain.OnTriggered = () =>
-        {
-            PresentTargetMenu(0);
-        };
+        var startAgain = Button(
+            MiloIntent.ButtonAfterCancel,
+            PresentTargetMenuPageZero,
+            "mixservice_after_cancel_new_order");
 
         Messaging.SendTextMessage(
-            "cancelled.",
+            MiloDialogue.Line(
+                MiloIntent.OrderCancelled,
+                JobFacts()),
             new[] { startAgain });
     }
 
@@ -1505,8 +1603,9 @@ public sealed class MixerContactNpc : NPC
         if (_job.PaymentNeedsReview)
         {
             Messaging.SendTextMessage(
-                "the cash change on this order needs review. " +
-                "i can't cancel it automatically yet.",
+                MiloDialogue.Line(
+                    MiloIntent.RefundNeedsReview,
+                    JobFacts()),
                 new[] { CreateStatusResponse() },
                 responseDelay: 0f);
             return false;
@@ -1515,14 +1614,24 @@ public sealed class MixerContactNpc : NPC
         if (MiloWalletPayment.TryRefund(
                 _job.AmountPaid,
                 out string problem,
-                out bool paymentNeedsReview))
+                out bool paymentNeedsReview,
+                out MiloPaymentFailure paymentFailure))
             return true;
 
         _job.PaymentNeedsReview = paymentNeedsReview;
         MelonLogger.Error(problem);
+
+        MiloLineFacts facts = JobFacts();
+        facts.Failure = paymentFailure;
+
         Messaging.SendTextMessage(
-            "can't settle your refund right now. " +
-            "the order's still on my books.",
+            paymentNeedsReview
+                ? MiloDialogue.Line(
+                    MiloIntent.RefundNeedsReview,
+                    facts)
+                : MiloDialogue.Line(
+                    MiloIntent.RefundFailed,
+                    facts),
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
         return false;
@@ -1539,7 +1648,8 @@ public sealed class MixerContactNpc : NPC
         }
 
         _depositAcknowledged = false;
-        _lastRejectedDeposit = null;
+        _rejectionGuard.Clear();
+        _depositLocationKnown = false;
     }
 
     protected override void OnDestroyed()

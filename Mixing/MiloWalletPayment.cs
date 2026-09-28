@@ -14,13 +14,16 @@ public static class MiloWalletPayment
     public static bool TryCharge(
         int amount,
         out string problem,
-        out bool paymentNeedsReview)
+        out bool paymentNeedsReview,
+        out MiloPaymentFailure failure)
     {
         problem = string.Empty;
         paymentNeedsReview = false;
+        failure = MiloPaymentFailure.None;
         if (amount <= 0)
         {
             problem = "invalid payment amount";
+            failure = MiloPaymentFailure.InvalidAmount;
             return false;
         }
 
@@ -32,36 +35,42 @@ public static class MiloWalletPayment
         catch (Exception ex)
         {
             problem = $"could not read cash balance: {ex.Message}";
+            failure = MiloPaymentFailure.BalanceUnavailable;
             return false;
         }
 
         if (!IsValidBalance(before))
         {
             problem = "cash balance is unavailable";
+            failure = MiloPaymentFailure.BalanceUnavailable;
             return false;
         }
 
         if (before < amount)
         {
             problem = "not enough cash on hand";
+            failure = MiloPaymentFailure.InsufficientCash;
             return false;
         }
 
         return TryApply(
             before, -amount, amount,
-            out problem, out paymentNeedsReview);
+            out problem, out paymentNeedsReview, out failure);
     }
 
     public static bool TryRefund(
         int amount,
         out string problem,
-        out bool paymentNeedsReview)
+        out bool paymentNeedsReview,
+        out MiloPaymentFailure failure)
     {
         problem = string.Empty;
         paymentNeedsReview = false;
+        failure = MiloPaymentFailure.None;
         if (amount < 0)
         {
             problem = "invalid refund amount";
+            failure = MiloPaymentFailure.InvalidAmount;
             return false;
         }
 
@@ -76,18 +85,20 @@ public static class MiloWalletPayment
         catch (Exception ex)
         {
             problem = $"could not read cash balance: {ex.Message}";
+            failure = MiloPaymentFailure.BalanceUnavailable;
             return false;
         }
 
         if (!IsValidBalance(before))
         {
             problem = "cash balance is unavailable";
+            failure = MiloPaymentFailure.BalanceUnavailable;
             return false;
         }
 
         return TryApply(
             before, amount, amount,
-            out problem, out paymentNeedsReview);
+            out problem, out paymentNeedsReview, out failure);
     }
 
     private static bool TryApply(
@@ -95,10 +106,12 @@ public static class MiloWalletPayment
         float change,
         int expectedAmount,
         out string problem,
-        out bool paymentNeedsReview)
+        out bool paymentNeedsReview,
+        out MiloPaymentFailure failure)
     {
         problem = string.Empty;
         paymentNeedsReview = false;
+        failure = MiloPaymentFailure.None;
         Exception? changeError = null;
 
         try
@@ -120,6 +133,7 @@ public static class MiloWalletPayment
         catch (Exception ex)
         {
             paymentNeedsReview = true;
+            failure = MiloPaymentFailure.ChangeUnverifiable;
             problem = $"cash changed but could not be checked: {ex.Message}";
             return false;
         }
@@ -127,6 +141,7 @@ public static class MiloWalletPayment
         if (!IsValidBalance(after))
         {
             paymentNeedsReview = true;
+            failure = MiloPaymentFailure.ChangeUnverifiable;
             problem = "cash changed but the resulting balance is unavailable";
             return false;
         }
@@ -139,6 +154,7 @@ public static class MiloWalletPayment
             return true;
 
         paymentNeedsReview = Math.Abs(observed) > BalanceTolerance;
+        failure = MiloPaymentFailure.ChangeMismatch;
         problem = paymentNeedsReview
             ? $"cash changed by an unexpected amount ({observed:N2}); " +
               "the order needs review"
