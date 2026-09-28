@@ -6,7 +6,7 @@ public enum MixJobState
     AwaitingDeposit = 1,
     Processing = 2,
     ReadyForPickup = 3,
-    AwaitingPayment = 4
+    AwaitingPayment = 4 // Legacy saves only; new orders go to AwaitingDeposit.
 }
 
 public sealed class MixJob
@@ -29,19 +29,23 @@ public sealed class MixJob
     // Fixed at order creation; future price changes do not alter an existing quote.
     public int QuotedFee { get; set; }
     public int AmountPaid { get; set; }
+    // Blocks automatic retries if a wallet call may have moved an unknown amount.
+    public bool PaymentNeedsReview { get; set; }
     public int RemainingBalance =>
         System.Math.Max(0, QuotedFee - AmountPaid);
 
     public string InputQuality { get; set; } = "";
 
-    /*
-     * DeadDropGuid is the original handoff drop.
-     */
+    // The input handoff assigned to this order. Persist its GUID so a reload
+    // never chooses a different drop while product is waiting there.
+    public string AssignedDrop { get; set; } = "";
+
+    // Kept only to migrate orders saved before AssignedDrop existed.
     public string DeadDropGuid { get; set; } = "";
 
     /*
-     * PickupDropGuid may be the same drop, but is separate
-     * because the original could become occupied while Milo
+     * PickupDropGuid may be the assigned drop, but is separate
+     * because that drop could become occupied while Milo
      * is processing the order.
      */
     public string PickupDropGuid { get; set; } = "";
@@ -54,6 +58,12 @@ public sealed class MixJob
      * this order again just because the save was reloaded.
      */
     public bool OutputSpawned { get; set; }
+
+    public void RestoreAssignedDrop()
+    {
+        if (string.IsNullOrWhiteSpace(AssignedDrop))
+            AssignedDrop = DeadDropGuid;
+    }
 
     public void Reset()
     {
@@ -72,9 +82,11 @@ public sealed class MixJob
         RequiredPackages = 0;
         QuotedFee = 0;
         AmountPaid = 0;
+        PaymentNeedsReview = false;
 
         InputQuality = "";
 
+        AssignedDrop = "";
         DeadDropGuid = "";
         PickupDropGuid = "";
 

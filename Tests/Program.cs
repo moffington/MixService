@@ -13,7 +13,9 @@ Equal(700, MixFeePolicy.Quote("bag", 10, 1), "other package type");
 
 var job = new MixJob
 {
-    State = MixJobState.AwaitingPayment,
+    State = MixJobState.AwaitingDeposit,
+    AssignedDrop = "drop-for-this-order",
+    PaymentNeedsReview = true,
     QuotedFee = 29000,
     RequiredPackages = 20
 };
@@ -21,7 +23,11 @@ Equal(29000, job.RemainingBalance, "unpaid balance");
 job.AmountPaid = 9000;
 Equal(20000, job.RemainingBalance, "partial balance");
 var restored = JsonSerializer.Deserialize<MixJob>(JsonSerializer.Serialize(job))!;
-Equal((int)MixJobState.AwaitingPayment, (int)restored.State, "saved payment state");
+Equal((int)MixJobState.AwaitingDeposit, (int)restored.State, "saved deposit state");
+if (restored.AssignedDrop != "drop-for-this-order")
+    throw new Exception("assigned drop was not persisted");
+if (!restored.PaymentNeedsReview)
+    throw new Exception("payment review state was not persisted");
 Equal(29000, restored.QuotedFee, "saved quote");
 Equal(9000, restored.AmountPaid, "saved payment");
 Equal(20000, restored.RemainingBalance, "restored balance");
@@ -30,6 +36,19 @@ Equal(0, job.RemainingBalance, "paid balance");
 job.Reset();
 Equal(0, job.QuotedFee, "reset quote");
 Equal(0, job.AmountPaid, "reset paid amount");
+if (job.AssignedDrop != "")
+    throw new Exception("reset did not clear assigned drop");
+if (job.PaymentNeedsReview)
+    throw new Exception("reset did not clear payment review state");
 Equal((int)MixJobState.Idle, (int)job.State, "reset state");
+
+var legacy = new MixJob
+{
+    State = MixJobState.AwaitingDeposit,
+    DeadDropGuid = "legacy-drop"
+};
+legacy.RestoreAssignedDrop();
+if (legacy.AssignedDrop != "legacy-drop")
+    throw new Exception("legacy drop was not migrated");
 
 Console.WriteLine("Economy tests passed.");
