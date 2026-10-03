@@ -41,6 +41,7 @@ internal static class DialogueTests
         EveryIntentHasLines();
         NoBankIsMissingOrExtra();
         EveryLineRendersCleanly();
+        DepositTextNamesInput();
         UnpaidQuotesStateTheTiming();
         PackagingAgreesWithCount();
         EveryLineIsTerse();
@@ -72,6 +73,7 @@ internal static class DialogueTests
         return new MiloLineFacts
         {
             ProductName = "Banana Butter",
+            InputProductName = "Cocaine",
             DropLocation = DropName,
             LocationKnown = true,
             SameSpotAsDeposit = true,
@@ -163,6 +165,35 @@ internal static class DialogueTests
 
     private static Dictionary<MiloIntent, MiloBank> Banks() =>
         MiloDialogueBank.Build();
+
+    private static void DepositTextNamesInput()
+    {
+        foreach (string input in new[] { "Cocaine", "Meth", "Shrooms" })
+        {
+            MiloLineFacts facts = FullFacts();
+            facts.InputProductName = input;
+
+            foreach (MiloIntent intent in new[]
+                     {
+                         MiloIntent.DepositInstructions,
+                         MiloIntent.AwaitingDeposit
+                     })
+            {
+                foreach (MiloBankTier tier in Banks()[intent].Tiers)
+                {
+                    foreach (string line in tier.Lines)
+                    {
+                        string rendered = MiloLineFormatter.Format(line, facts);
+                        if (line.Contains("{input}", StringComparison.Ordinal) &&
+                            !rendered.Contains(input, StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new Exception($"{intent} lost {input}: {rendered}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     private static IEnumerable<MiloIntent> ButtonIntents() =>
         Enum.GetValues(typeof(MiloIntent))

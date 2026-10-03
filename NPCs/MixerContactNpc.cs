@@ -18,9 +18,29 @@ public sealed class MixerContactNpc : NPC
 {
     private const int TargetPageSize = 3;
 
-    private const string CocaineProductId = "cocaine";
     private const string BrickPackagingId = "brick";
     private const int BrickCapacity = 20;
+
+    private sealed class MixFamily
+    {
+        public MixFamily(DrugType drugType, string inputProductId, string inputProductName)
+        {
+            DrugType = drugType;
+            InputProductId = inputProductId;
+            InputProductName = inputProductName;
+        }
+
+        public DrugType DrugType { get; }
+        public string InputProductId { get; }
+        public string InputProductName { get; }
+    }
+
+    private static readonly MixFamily[] MixFamilies =
+    {
+        new(DrugType.Cocaine, "cocaine", "Cocaine"),
+        new(DrugType.Methamphetamine, "meth", "Meth"),
+        new(DrugType.Shrooms, "shrooms", "Shrooms")
+    };
 
     private const int ProcessingDurationMinutes = 6 * 60;
 
@@ -129,6 +149,7 @@ public sealed class MixerContactNpc : NPC
         return new MiloLineFacts
         {
             ProductName = _job.TargetProductName,
+            InputProductName = _job.InputProductName,
             BrickCount = _job.RequiredPackages,
             Fee = _job.QuotedFee,
             Due = _job.RemainingBalance,
@@ -230,7 +251,7 @@ public sealed class MixerContactNpc : NPC
 
         var order = Button(
             MiloIntent.ButtonNewOrder,
-            PresentTargetMenuPageZero,
+            PresentDrugMenu,
             "mixservice_new_order");
 
         Messaging.SendTextMessage(
@@ -240,12 +261,40 @@ public sealed class MixerContactNpc : NPC
             new[] { order });
     }
 
-    private void PresentTargetMenuPageZero()
+    private void PresentDrugMenu()
     {
-        PresentTargetMenu(0);
+        if (_job.State != MixJobState.Idle)
+        {
+            SendCurrentStatus();
+            return;
+        }
+
+        var responses = new List<Response>();
+        foreach (MixFamily family in MixFamilies)
+        {
+            MixFamily selected = family;
+            var response = new Response
+            {
+                Label = $"mixservice_drug_{family.InputProductId}",
+                Text = family.InputProductName
+            };
+            response.OnTriggered = () => PresentTargetMenu(selected, 0);
+            responses.Add(response);
+        }
+
+        responses.Add(Button(
+            MiloIntent.ButtonNeverMind,
+            PresentIdleMenu,
+            "mixservice_drug_cancel"));
+
+        Messaging.SendTextMessage(
+            MiloDialogue.Line(
+                MiloIntent.DrugPrompt,
+                new MiloLineFacts()),
+            responses.ToArray());
     }
 
-    private void PresentTargetMenu(int page)
+    private void PresentTargetMenu(MixFamily family, int page)
     {
         if (_job.State != MixJobState.Idle)
         {
@@ -254,19 +303,22 @@ public sealed class MixerContactNpc : NPC
         }
 
         ProductDefinition[] targets =
-            GetDiscoveredCocaineTargets();
+            GetDiscoveredTargets(family);
 
         if (targets.Length == 0)
         {
             var retry = Button(
-                MiloIntent.ButtonNeverMind,
-                PresentIdleMenu,
+                MiloIntent.ButtonDifferentDrug,
+                PresentDrugMenu,
                 "mixservice_no_targets_retry");
 
             Messaging.SendTextMessage(
                 MiloDialogue.Line(
                     MiloIntent.NoTargetsDiscovered,
-                    new MiloLineFacts()),
+                    new MiloLineFacts
+                    {
+                        InputProductName = family.InputProductName
+                    }),
                 new[] { retry });
 
             return;
@@ -315,6 +367,7 @@ public sealed class MixerContactNpc : NPC
             response.OnTriggered = () =>
             {
                 PresentQuantityMenu(
+                    family,
                     targetId,
                     targetName);
             };
@@ -330,14 +383,14 @@ public sealed class MixerContactNpc : NPC
             responses.Add(
                 Button(
                     MiloIntent.ButtonMore,
-                    () => PresentTargetMenu(nextPage),
+                    () => PresentTargetMenu(family, nextPage),
                     $"mixservice_target_more_{page}"));
         }
 
         responses.Add(
             Button(
-                MiloIntent.ButtonNeverMind,
-                PresentIdleMenu,
+                MiloIntent.ButtonDifferentDrug,
+                PresentDrugMenu,
                 $"mixservice_target_cancel_{page}"));
 
         Messaging.SendTextMessage(
@@ -348,21 +401,22 @@ public sealed class MixerContactNpc : NPC
     }
 
     private static ProductDefinition[]
-        GetDiscoveredCocaineTargets()
+        GetDiscoveredTargets(MixFamily family)
     {
         return ProductManager.DiscoveredProducts
             .Where(product =>
                 product.PrimaryDrugType ==
-                    DrugType.Cocaine
+                    family.DrugType
                 && !string.Equals(
                     product.ID,
-                    CocaineProductId,
+                    family.InputProductId,
                     StringComparison.OrdinalIgnoreCase))
             .OrderBy(product => product.Name)
             .ToArray();
     }
 
     private void PresentQuantityMenu(
+        MixFamily family,
         string targetProductId,
         string targetProductName)
     {
@@ -389,6 +443,7 @@ public sealed class MixerContactNpc : NPC
                 QuantityButton(
                     quantity,
                     selected => CreateOrder(
+                        family,
                         targetProductId,
                         targetProductName,
                         selected)));
@@ -397,7 +452,7 @@ public sealed class MixerContactNpc : NPC
         responses.Add(
             Button(
                 MiloIntent.ButtonDifferentMix,
-                PresentTargetMenuPageZero,
+                () => PresentTargetMenu(family, 0),
                 "mixservice_qty_back"));
 
         Messaging.SendTextMessage(
@@ -411,6 +466,7 @@ public sealed class MixerContactNpc : NPC
     }
 
     private void CreateOrder(
+        MixFamily family,
         string targetProductId,
         string targetProductName,
         int requiredBricks)
@@ -422,6 +478,21 @@ public sealed class MixerContactNpc : NPC
             SendCurrentStatus();
             return;
         }
+
+        // Old phone responses remain clickable. Recheck discovery and family
+        // before assigning a drop or saving a new job.
+        ProductDefinition? target = GetDiscoveredTargets(family)
+            .FirstOrDefault(product => string.Equals(
+                product.ID,
+                targetProductId,
+                StringComparison.OrdinalIgnoreCase));
+        if (target == null)
+        {
+            PresentTargetMenu(family, 0);
+            return;
+        }
+
+        targetProductName = target.Name;
 
         DeadDropInstance? assignedDrop =
             OrderDropAssignment.ChooseEmpty();
@@ -451,10 +522,10 @@ public sealed class MixerContactNpc : NPC
         _pickupLocationKnown = false;
 
         _job.InputProductId =
-            CocaineProductId;
+            family.InputProductId;
 
         _job.InputProductName =
-            "Cocaine";
+            family.InputProductName;
 
         _job.TargetProductId =
             targetProductId;
@@ -482,7 +553,7 @@ public sealed class MixerContactNpc : NPC
         AttachReservedDropListener();
 
         MelonLogger.Msg(
-            $"Quoted order: {requiredBricks} cocaine bricks -> " +
+            $"Quoted order: {requiredBricks} {family.InputProductName} bricks -> " +
             $"'{targetProductName}' for ${_job.QuotedFee:N0} " +
             $"at '{assignedDrop.Name}' GUID={assignedDrop.GUID}.");
 
@@ -504,7 +575,7 @@ public sealed class MixerContactNpc : NPC
 
         MelonLogger.Msg(
             $"Assigned order: ${_job.QuotedFee:N0} quoted; " +
-            $"{_job.RequiredPackages} cocaine {brickWord} -> " +
+            $"{_job.RequiredPackages} {_job.InputProductName} {brickWord} -> " +
             $"'{_job.TargetProductName}' at '{_reservedDrop.Name}' " +
             $"GUID={_reservedDrop.GUID}");
 
@@ -606,7 +677,7 @@ public sealed class MixerContactNpc : NPC
 
         MelonLogger.Msg(
             $"Restored awaiting order: " +
-            $"{_job.RequiredPackages} cocaine {brickWord} -> " +
+            $"{_job.RequiredPackages} {_job.InputProductName} {brickWord} -> " +
             $"'{_job.TargetProductName}' " +
             $"at '{_reservedDrop.Name}'");
 
@@ -681,7 +752,7 @@ public sealed class MixerContactNpc : NPC
         if (!batch.IsPackaged)
         {
             RejectDeposit(
-                "cocaine is unpackaged; bricks required");
+                $"{_job.InputProductName} is unpackaged; bricks required");
 
             return;
         }
@@ -1448,7 +1519,7 @@ public sealed class MixerContactNpc : NPC
 
         var another = Button(
             MiloIntent.ButtonAfterPickup,
-            PresentTargetMenuPageZero,
+            PresentDrugMenu,
             "mixservice_after_pickup_new_order");
 
         Messaging.SendTextMessage(
@@ -1588,7 +1659,7 @@ public sealed class MixerContactNpc : NPC
 
         var startAgain = Button(
             MiloIntent.ButtonAfterCancel,
-            PresentTargetMenuPageZero,
+            PresentDrugMenu,
             "mixservice_after_cancel_new_order");
 
         Messaging.SendTextMessage(

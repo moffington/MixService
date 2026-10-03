@@ -9,6 +9,7 @@ public enum MiloIntent
 {
     // ---- Conversation openers and menus ----
     Greeting,
+    DrugPrompt,
     NoTargetsDiscovered,
     TargetPrompt,
     QuantityPrompt,
@@ -44,6 +45,7 @@ public enum MiloIntent
 
     // ---- Response button labels ----
     ButtonNewOrder,
+    ButtonDifferentDrug,
     ButtonNeverMind,
     ButtonMore,
     ButtonQuantity,

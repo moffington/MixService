@@ -26,6 +26,7 @@ public sealed class MiloLineFacts
     public const int LargeOrderBricks = 20;
 
     public string ProductName { get; set; } = "";
+    public string InputProductName { get; set; } = "";
 
     /// <summary>
     /// Formatted "name (description)" for the drop in play. Left empty when the

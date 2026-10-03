@@ -20,6 +20,7 @@ internal static class MiloLineFormatter
         string result = template;
 
         result = Replace(result, "product", facts.ProductName);
+        result = Replace(result, "input", facts.InputProductName.ToLowerInvariant());
 
         result = Replace(
             result,

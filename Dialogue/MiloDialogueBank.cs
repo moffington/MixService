@@ -25,6 +25,7 @@ namespace MixService.Dialogue;
 ///
 /// Placeholders a line may use:
 ///   {product}   the mix being made          {drop}     where the drop is
+///   {input}     the base product to deposit
 ///   {bricks}    how many bricks             {brick}    brick / bricks to match
 ///   {count}     how many finished packages  {packaging}   packaging name
 ///   {quality}   the input quality           {packagings}  packaging name + s
@@ -63,12 +64,19 @@ public static class MiloDialogueBank
                     "milo. what do you need.",
                     "hi. quickly.")),
 
+            [MiloIntent.DrugPrompt] = new MiloBank(
+                new MiloBankTier(
+                    null,
+                    "what are we mixing?",
+                    "pick the base product.",
+                    "what's the batch?")),
+
             [MiloIntent.NoTargetsDiscovered] = new MiloBank(
                 new MiloBankTier(
                     null,
-                    "no mixes figured out yet.",
-                    "figure out a cocaine mix first.",
-                    "nothing for me to make.")),
+                    "no {input} mixes figured out yet.",
+                    "figure out a {input} mix first.",
+                    "nothing to make with {input} yet.")),
 
             [MiloIntent.TargetPrompt] = new MiloBank(
                 new MiloBankTier(
@@ -123,17 +131,17 @@ public static class MiloDialogueBank
             [MiloIntent.DepositInstructions] = new MiloBank(
                 new MiloBankTier(
                     facts => facts.IsLargeOrder,
-                    "{bricks} cocaine {brick} at {drop}. one quality, no sorting.",
-                    "{drop}. {bricks} cocaine {brick}, all identical quality.",
-                    "put {bricks} cocaine {brick} in {drop}. " +
+                    "{bricks} {input} {brick} at {drop}. one quality, no sorting.",
+                    "{drop}. {bricks} {input} {brick}, all identical quality.",
+                    "put {bricks} {input} {brick} in {drop}. " +
                         "same quality on all of it."),
 
                 new MiloBankTier(
                     null,
-                    "{bricks} cocaine {brick} at {drop}. one quality.",
-                    "drop {bricks} cocaine {brick} at {drop}. same quality throughout.",
-                    "{drop}. {bricks} cocaine {brick}, one quality.",
-                    "leave {bricks} cocaine {brick} at {drop}. don't vary the quality.")),
+                    "{bricks} {input} {brick} at {drop}. one quality.",
+                    "drop {bricks} {input} {brick} at {drop}. same quality throughout.",
+                    "{drop}. {bricks} {input} {brick}, one quality.",
+                    "leave {bricks} {input} {brick} at {drop}. don't vary the quality.")),
 
             // ---------------------------------------------------------
             // Waiting on the player
@@ -141,10 +149,10 @@ public static class MiloDialogueBank
             [MiloIntent.AwaitingDeposit] = new MiloBank(
                 new MiloBankTier(
                     facts => !facts.LocationKnown,
-                    "still waiting. {bricks} cocaine {brick} at {drop}.",
-                    "nothing yet. {drop}, {bricks} cocaine {brick}.",
-                    "{drop}. {bricks} cocaine {brick}.",
-                    "i don't have the goods. {drop}, {bricks} cocaine {brick}."),
+                    "still waiting. {bricks} {input} {brick} at {drop}.",
+                    "nothing yet. {drop}, {bricks} {input} {brick}.",
+                    "{drop}. {bricks} {input} {brick}.",
+                    "i don't have the goods. {drop}, {bricks} {input} {brick}."),
 
                 new MiloBankTier(
                     facts => facts.IsLargeOrder,
@@ -154,7 +162,7 @@ public static class MiloDialogueBank
 
                 new MiloBankTier(
                     null,
-                    "{bricks} cocaine {brick}. where i told you.",
+                    "{bricks} {input} {brick}. where i told you.",
                     "still waiting. {bricks} {brick}, same spot.",
                     "nothing from you. {bricks} {brick}, same place.",
                     "drop's still empty. {bricks} {brick}.",
@@ -340,6 +348,11 @@ public static class MiloDialogueBank
                 new MiloBankTier(
                     null,
                     "need a batch mixed")),
+
+            [MiloIntent.ButtonDifferentDrug] = new MiloBank(
+                new MiloBankTier(
+                    null,
+                    "different drug")),
 
             [MiloIntent.ButtonNeverMind] = new MiloBank(
                 new MiloBankTier(
