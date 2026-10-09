@@ -4,6 +4,8 @@ using System.Linq;
 using MelonLoader;
 using MixService.Dialogue;
 using MixService.Mixing;
+using MixService.Configuration;
+using MixService.Utils;
 using S1API.DeadDrops;
 using S1API.Entities;
 using S1API.GameTime;
@@ -42,8 +44,6 @@ public sealed class MixerContactNpc : NPC
         new(DrugType.Shrooms, "shrooms", "Shrooms"),
         new(DrugType.Marijuana, "weed", "Weed")
     };
-
-    private const int ProcessingDurationMinutes = 6 * 60;
 
     public static MixerContactNpc? Instance { get; private set; }
 
@@ -89,12 +89,14 @@ public sealed class MixerContactNpc : NPC
 
         _job ??= new MixJob();
         _job.RestoreAssignedDrop();
+        _job.RestoreProcessingDuration();
     }
 
     public void InitializeAfterWorldLoad()
     {
         _job ??= new MixJob();
         _job.RestoreAssignedDrop();
+        _job.RestoreProcessingDuration();
 
         /*
          * A fresh session has told the player nothing about either drop, so
@@ -107,7 +109,7 @@ public sealed class MixerContactNpc : NPC
         ReleasePickupDrop();
         DetachProcessingClock();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Initializing Milo after world load: {_job.State}");
 
         switch (_job.State)
@@ -748,11 +750,13 @@ public sealed class MixerContactNpc : NPC
         _job.QuotedFee = MixFeePolicy.Quote(
             _job.PackagingId,
             _job.PackageCapacity,
-            _job.RequiredPackages);
+            _job.RequiredPackages,
+            ServiceSettings.PricePerBrick);
+        _job.ProcessingDurationMinutes = ServiceSettings.ProcessingMinutes;
 
         AttachReservedDropListener();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Quoted order: {requiredBricks} {inputProductName} bricks -> " +
             $"'{targetProductName}' for ${_job.QuotedFee:N0} " +
             $"at '{assignedDrop.Name}' GUID={assignedDrop.GUID}.");
@@ -773,7 +777,7 @@ public sealed class MixerContactNpc : NPC
             DepositFacts(
                 _reservedDrop);
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Assigned order: ${_job.QuotedFee:N0} quoted; " +
             $"{_job.RequiredPackages} {_job.InputProductName} {brickWord} -> " +
             $"'{_job.TargetProductName}' at '{_reservedDrop.Name}' " +
@@ -880,7 +884,7 @@ public sealed class MixerContactNpc : NPC
                 ? "brick"
                 : "bricks";
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Restored awaiting order: " +
             $"{_job.RequiredPackages} {_job.InputProductName} {brickWord} -> " +
             $"'{_job.TargetProductName}' " +
@@ -1152,7 +1156,7 @@ public sealed class MixerContactNpc : NPC
 
         _job.CompletesAtGameMinutes =
             _job.StartedAtGameMinutes
-            + ProcessingDurationMinutes;
+            + _job.ProcessingDurationMinutes;
 
         _job.State =
             MixJobState.Processing;
@@ -1162,7 +1166,7 @@ public sealed class MixerContactNpc : NPC
 
         AttachProcessingClock();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Processing started: " +
             $"{batch.StackQuantity}x " +
             $"{batch.Quality} " +
@@ -1175,15 +1179,15 @@ public sealed class MixerContactNpc : NPC
         Messaging.SendTextMessage(
             MiloDialogue.Line(
                 MiloIntent.ProcessingStarted,
-                ProcessingFacts(ProcessingDurationMinutes)),
+                ProcessingFacts(_job.ProcessingDurationMinutes)),
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
     }
 
     /// <summary>
     /// Facts for the two "it is on my bench" messages. The product name is
-    /// mandatory there; the clock wording comes from the one duration
-    /// constant so the two messages can never disagree.
+    /// mandatory there; the clock wording comes from the saved duration
+    /// so later settings changes cannot change an existing order's terms.
     /// </summary>
     private MiloLineFacts ProcessingFacts(
         int remainingMinutes)
@@ -1191,7 +1195,7 @@ public sealed class MixerContactNpc : NPC
         MiloLineFacts facts = JobFacts();
 
         facts.Duration = MiloDialogue.DescribeDuration(
-            ProcessingDurationMinutes);
+            _job.ProcessingDurationMinutes);
 
         facts.TimeLeft = MiloDialogue.DescribeDuration(
             remainingMinutes);
@@ -1223,7 +1227,7 @@ public sealed class MixerContactNpc : NPC
             new[] { CreateStatusResponse() },
             responseDelay: 0f);
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Restored processing order. " +
             $"Now={GameClock.CurrentAbsoluteMinutes}, " +
             $"Complete={_job.CompletesAtGameMinutes}, " +
@@ -1478,7 +1482,7 @@ public sealed class MixerContactNpc : NPC
 
         AttachPickupDrop(pickupDrop);
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Spawned completed order: " +
             $"{_job.RequiredPackages}x " +
             $"{_job.InputQuality} " +
@@ -1703,7 +1707,7 @@ public sealed class MixerContactNpc : NPC
 
         if (remaining > 0)
         {
-            MelonLogger.Msg(
+            ModLog.Debug(
                 $"Pickup partially collected; " +
                 $"{remaining} package(s) remain.");
 
@@ -1727,7 +1731,7 @@ public sealed class MixerContactNpc : NPC
 
         _job.Reset();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Pickup completed: " +
             $"{packageCount}x '{target}' collected.");
 
@@ -1784,7 +1788,7 @@ public sealed class MixerContactNpc : NPC
 
     private void OnSleepEnd(int minutesSkipped)
     {
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Sleep ended; skipped " +
             $"{minutesSkipped} game minutes.");
 
@@ -1813,7 +1817,7 @@ public sealed class MixerContactNpc : NPC
 
         DetachProcessingClock();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Processing completed: " +
             $"'{_job.TargetProductName}'. " +
             $"Now={now}, " +
@@ -1868,7 +1872,7 @@ public sealed class MixerContactNpc : NPC
 
         _job.Reset();
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"Cancelled order for '{target}'.");
 
         var startAgain = Button(

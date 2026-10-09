@@ -4,6 +4,7 @@ using MixService.Utils;
 using System.Collections;
 using MixService.NPCs;
 using MixService.Compatibility;
+using MixService.Configuration;
 using S1API.Entities;
 using UnityEngine;
 
@@ -16,15 +17,12 @@ namespace MixService
     {
         public static Core? Instance { get; private set; }
 
-        private static MelonPreferences_Category? _preferencesCategory;
-        private static MelonPreferences_Entry<bool>? _debugLogsEntry;
-
-        public static bool DebugLogsEnabled => _debugLogsEntry?.Value ?? Constants.Defaults.DebugLogsEnabled;
+        public static bool DebugLogsEnabled => ServiceSettings.DebugLogsEnabled;
 
         public override void OnInitializeMelon()
         {
             Instance = this;
-            InitializePreferences();
+            ServiceSettings.Initialize();
             GameLifecycle.OnPreLoad += OnPreLoad;
             GameLifecycle.OnLoadComplete += OnLoadComplete;
 
@@ -40,12 +38,12 @@ namespace MixService
 
         private void OnPreLoad()
         {
-            LoggerInstance.Msg("Game is preparing to load. Register stable S1API content needed by save data here.");
+            ModLog.Debug("Game is preparing to load. Register stable S1API content needed by save data here.");
         }
 
         private static void OnLoadComplete()
         {
-            MelonLogger.Msg(
+            ModLog.Debug(
                 "[MixService] Save loading is complete. " +
                 "Initialize systems that depend on the loaded world here.");
 
@@ -77,7 +75,7 @@ namespace MixService
 
                 if (npc is MixerContactNpc milo)
                 {
-                    MelonLogger.Msg(
+                    ModLog.Debug(
                         $"[MixService] Resolved final Milo wrapper. " +
                         $"Icon={(milo.Icon != null ? "ready" : "missing")}");
 
@@ -112,15 +110,5 @@ namespace MixService
                 "within 20 seconds after load.");
         }
 
-        private static void InitializePreferences()
-        {
-            _preferencesCategory = MelonPreferences.CreateCategory(Constants.PreferencesCategory);
-            _debugLogsEntry = _preferencesCategory.CreateEntry(
-                "DebugLogs",
-                Constants.Defaults.DebugLogsEnabled,
-                "Enable Debug Logs",
-                "Show detailed debug messages in the MelonLoader console.");
-            _preferencesCategory.SaveToFile(false);
-        }
     }
 }

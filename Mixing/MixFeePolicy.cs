@@ -1,4 +1,5 @@
 using System;
+using MixService.Utils;
 
 namespace MixService.Mixing;
 
@@ -11,7 +12,8 @@ public static class MixFeePolicy
     public static int Quote(
         string packagingId,
         int packageCapacity,
-        int packageCount)
+        int packageCount,
+        int pricePerBrick = Constants.Defaults.PricePerBrick)
     {
         if (string.IsNullOrWhiteSpace(packagingId))
             throw new ArgumentException("Packaging is required.", nameof(packagingId));
@@ -19,12 +21,14 @@ public static class MixFeePolicy
             throw new ArgumentOutOfRangeException(nameof(packageCapacity));
         if (packageCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(packageCount));
+        if (pricePerBrick <= 0)
+            throw new ArgumentOutOfRangeException(nameof(pricePerBrick));
 
         // The current order menu offers bricks only. Other packaging can be
         // priced by capacity when future order types are introduced.
         int perPackage = string.Equals(
             packagingId, "brick", StringComparison.OrdinalIgnoreCase)
-            ? 1450
+            ? pricePerBrick
             : Math.Max(100, checked(packageCapacity * 70));
 
         return checked(perPackage * packageCount);

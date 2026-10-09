@@ -1,3 +1,5 @@
+using MixService.Utils;
+
 namespace MixService.Mixing;
 
 public enum MixJobState
@@ -28,6 +30,9 @@ public sealed class MixJob
 
     // Fixed at order creation; future price changes do not alter an existing quote.
     public int QuotedFee { get; set; }
+    // Fixed alongside the fee at order creation, before any deposit is made.
+    // Zero identifies older saves that did not store a duration.
+    public int ProcessingDurationMinutes { get; set; }
     public int AmountPaid { get; set; }
     // Blocks automatic retries if a wallet call may have moved an unknown amount.
     public bool PaymentNeedsReview { get; set; }
@@ -65,6 +70,19 @@ public sealed class MixJob
             AssignedDrop = DeadDropGuid;
     }
 
+    public void RestoreProcessingDuration()
+    {
+        if (State == MixJobState.Idle || ProcessingDurationMinutes > 0)
+            return;
+
+        long recordedDuration = (long)CompletesAtGameMinutes - StartedAtGameMinutes;
+        ProcessingDurationMinutes =
+            (State == MixJobState.Processing || State == MixJobState.ReadyForPickup)
+            && recordedDuration > 0 && recordedDuration <= int.MaxValue
+                ? (int)recordedDuration
+                : Constants.Defaults.ProcessingMinutes;
+    }
+
     public void Reset()
     {
         State = MixJobState.Idle;
@@ -81,6 +99,7 @@ public sealed class MixJob
         PackageCapacity = 0;
         RequiredPackages = 0;
         QuotedFee = 0;
+        ProcessingDurationMinutes = 0;
         AmountPaid = 0;
         PaymentNeedsReview = false;
 

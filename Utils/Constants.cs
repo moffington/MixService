@@ -12,12 +12,16 @@ namespace MixService.Utils
         public static class Defaults
         {
             public const bool DebugLogsEnabled = false;
+            public const int PricePerBrick = 1450;
+            public const int ProcessingMinutes = 6 * 60;
         }
 
         public static class Constraints
         {
-            public const float MinConstraint = 0f;
-            public const float MaxConstraint = 100f;
+            public const int MinPricePerBrick = 1;
+            public const int MaxPricePerBrick = 100000;
+            public const int MinProcessingMinutes = 1;
+            public const int MaxProcessingMinutes = 7 * 24 * 60;
         }
 
         public static class Game

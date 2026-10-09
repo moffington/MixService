@@ -4,13 +4,40 @@ A beginner-friendly Schedule I mod template for [S1API.Forked](https://www.nuget
 
 ## Milo's mixing service
 
-Milo is a text-message contact. Select cocaine, meth, shrooms, or weed, then a discovered mix of that drug and an order of 1, 5, 10, or 20 bricks. For weed, Milo traces the game's loaded mix recipes to identify the starting strain (OG Kush, Sour Diesel, Green Crack, or Granddaddy Purple) and names it in the deposit instructions. If he cannot verify the recipe, he will not take an order or collect a pending batch. An older weed order with the wrong starting strain must be cancelled and rebooked. He quotes $1,450 per brick ($29,000 for 20) and assigns an empty dead drop to the order. The assigned drop is saved so a reload does not change the handoff location. Milo charges the player's cash balance only when he collects a complete, valid batch. The debit is checked against the reported cash balance before any product is removed. A failed payment leaves the product in the drop; the player can add cash and use **check my batch** to retry. Cancelling before collection refunds any amount already paid, including a charge carried forward from an older save.
+Milo is a text-message contact. Select cocaine, meth, shrooms, or weed, then a discovered mix of that drug and an order of 1, 5, 10, or 20 bricks. For weed, Milo traces the game's loaded mix recipes to identify the starting strain (OG Kush, Sour Diesel, Green Crack, or Granddaddy Purple) and names it in the deposit instructions. If he cannot verify the recipe, he will not take an order or collect a pending batch. An older weed order with the wrong starting strain must be cancelled and rebooked. By default, he quotes $1,450 per brick ($29,000 for 20) and assigns an empty dead drop to the order. The assigned drop is saved so a reload does not change the handoff location. Milo charges the player's cash balance only when he collects a complete, valid batch. The debit is checked against the reported cash balance before any product is removed. A failed payment leaves the product in the drop; the player can add cash and use **check my batch** to retry. Cancelling before collection refunds any amount already paid, including a charge carried forward from an older save.
 
-The product exchange remains one base-product brick for one target-product brick of the same drug family, with the input quality preserved and a six-hour game-time processing period. Milo allows one active order. The wallet payment is isolated in `Mixing/MiloWalletPayment.cs` so a Milo-specific cash drop can replace it later. If a wallet operation produces an unexpected or unreadable balance, the order retains a saved review flag and Milo stops automatic payment and collection retries.
+The product exchange remains one base-product brick for one target-product brick of the same drug family, with the input quality preserved and a default six-hour game-time processing period. Milo allows one active order. The wallet payment is isolated in `Mixing/MiloWalletPayment.cs` so a Milo-specific cash drop can replace it later. If a wallet operation produces an unexpected or unreadable balance, the order retains a saved review flag and Milo stops automatic payment and collection retries.
 
 Run the focused economy checks with `dotnet run --project Tests/MixService.Economy.Tests.csproj`. In game, verify a 20-brick quote and cash debit at collection, insufficient-cash retry with the deposit intact, cancellation before collection, save/load with an assigned drop, migration of an older unpaid or prepaid order, and the existing six-hour pickup flow. The automated tests cover pricing and persisted job data; they do not exercise S1API or the game runtime.
 
 The default path is `CrossCompat`: one mod assembly that stays on S1API/MelonLoader abstractions and avoids direct `ScheduleOne` or `Il2CppScheduleOne` game types. Use `Mono` or `Il2cpp` only when your mod intentionally needs runtime-specific game assemblies.
+
+## Configuration
+
+Launch the game once with MixService installed to create the three settings in `<game>/UserData/MelonPreferences.cfg`. They appear under `[MixService]`:
+
+```toml
+[MixService]
+PricePerBrick = 1450
+ProcessingMinutes = 360
+DebugLogs = false
+```
+
+| Setting | Default | Accepted range | When it applies |
+| --- | --- | --- | --- |
+| `PricePerBrick` | $1,450 | $1-$100,000 per brick, whole dollars | New orders |
+| `ProcessingMinutes` | 360 (six game hours) | 1-10,080 game minutes (seven game days) | New orders |
+| `DebugLogs` | `false` | `true` / `false` | Immediately through the phone app |
+
+For manual editing, close the game, edit only the `[MixService]` section, and launch again. Other mods may use the same file. Price and duration entries include range validators, and runtime reads also limit numeric values to the supported bounds. Zero-cost and instant orders are not supported.
+
+For in-game editing, optionally install Prowiler's [Mod Manager - Phone App](https://www.nexusmods.com/schedule1/mods/397). Choose its **beta build** matching the game's runtime: IL2CPP for `beta`, Mono for `alternate-beta`. Open its phone **Settings** app (or main-menu Config panel), select **MixService**, edit the values, and press **SAVE**. MixService reads current preference values when creating an order and when logging, so these changes do not require a restart. SAVE persists the values for the next session.
+
+Each order saves its quoted fee and processing duration when booked. Changing settings never reprices or reschedules an existing order, including one still waiting for a deposit. Older pending orders retain six hours; older active orders retain their saved completion deadline. Debug logging controls routine diagnostics, including conversation cleanup messages; warnings and errors remain visible.
+
+The phone app is optional. MixService uses standard MelonPreferences entries without referencing the phone app DLL. Settings are local to the game installation; this change does not add multiplayer settings synchronization.
+
+Verify in game: change the price and duration through the beta phone app, save, and book an order; change both settings while that order awaits its deposit, then collect and reload to confirm its original fee and timing remain intact. Book a subsequent order to confirm the new values. Toggle debug logging and confirm diagnostic messages change while warnings/errors remain available. Restart after editing the config file to verify persisted values.
 
 ## Quick Start
 

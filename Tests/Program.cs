@@ -52,6 +52,7 @@ legacy.RestoreAssignedDrop();
 if (legacy.AssignedDrop != "legacy-drop")
     throw new Exception("legacy drop was not migrated");
 
+ConfigurationTests.Run();
 DialogueTests.Run();
 WeedRecipeResolverTests.Run();
 

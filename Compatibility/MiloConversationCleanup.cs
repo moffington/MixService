@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reflection;
 using MelonLoader;
 using MixService.NPCs;
+using MixService.Utils;
 
 namespace MixService.Compatibility;
 
@@ -27,7 +28,7 @@ public static class MiloConversationCleanup
     {
         if (collection == null)
         {
-            MelonLogger.Msg(
+            ModLog.Debug(
                 $"[MiloCleanup] {label}: <null>");
 
             return 0;
@@ -37,7 +38,7 @@ public static class MiloConversationCleanup
             GetCollectionCount(
                 collection);
 
-        MelonLogger.Msg(
+        ModLog.Debug(
             $"[MiloCleanup] {label}: count={count}");
 
         if (count <= 0)
@@ -99,7 +100,7 @@ public static class MiloConversationCleanup
                 continue;
             }
 
-            MelonLogger.Msg(
+            ModLog.Debug(
                 $"[MiloCleanup] {label}: removing stale " +
                 $"Milo {NativeIdentity(conversation)} " +
                 $"at index {i}.");
@@ -214,7 +215,7 @@ public static class MiloConversationCleanup
 
             if (totalRemoved > 0)
             {
-                MelonLogger.Msg(
+                ModLog.Debug(
                     $"[MiloCleanup] Removed {totalRemoved} stale " +
                     $"Milo collection reference(s).");
             }
