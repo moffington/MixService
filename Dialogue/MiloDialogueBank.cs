@@ -87,6 +87,11 @@ public static class MiloDialogueBank
                     "what do you want mixed.",
                     "your pick.")),
 
+            [MiloIntent.WeedRecipesUnavailable] = new MiloBank(
+                new MiloBankTier(
+                    null,
+                    "can't trace that weed mix right now. try again later.")),
+
             [MiloIntent.QuantityPrompt] = new MiloBank(
                 new MiloBankTier(
                     null,
@@ -167,6 +172,16 @@ public static class MiloDialogueBank
                     "nothing from you. {bricks} {brick}, same place.",
                     "drop's still empty. {bricks} {brick}.",
                     "{bricks} {brick}. where i told you.")),
+
+            [MiloIntent.WeedOrderNeedsRebooking] = new MiloBank(
+                new MiloBankTier(
+                    null,
+                    "wrong strain on this order. your stuff's untouched. cancel and rebook.")),
+
+            [MiloIntent.WeedOrderRecipeUnavailable] = new MiloBank(
+                new MiloBankTier(
+                    null,
+                    "can't verify this weed order yet. your stuff's untouched. check back later.")),
 
             [MiloIntent.SettlementNote] = new MiloBank(
                 new MiloBankTier(

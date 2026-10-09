@@ -12,6 +12,7 @@ public enum MiloIntent
     DrugPrompt,
     NoTargetsDiscovered,
     TargetPrompt,
+    WeedRecipesUnavailable,
     QuantityPrompt,
 
     // ---- Taking the order ----
@@ -20,6 +21,8 @@ public enum MiloIntent
 
     // ---- Waiting on the player ----
     AwaitingDeposit,
+    WeedOrderNeedsRebooking,
+    WeedOrderRecipeUnavailable,
     SettlementNote,
 
     // ---- Working on the order ----

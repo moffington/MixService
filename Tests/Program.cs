@@ -53,5 +53,6 @@ if (legacy.AssignedDrop != "legacy-drop")
     throw new Exception("legacy drop was not migrated");
 
 DialogueTests.Run();
+WeedRecipeResolverTests.Run();
 
 Console.WriteLine("Economy tests passed.");

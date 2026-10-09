@@ -168,7 +168,11 @@ internal static class DialogueTests
 
     private static void DepositTextNamesInput()
     {
-        foreach (string input in new[] { "Cocaine", "Meth", "Shrooms" })
+        foreach (string input in new[]
+                 {
+                     "Cocaine", "Meth", "Shrooms", "OG Kush",
+                     "Sour Diesel", "Green Crack", "Granddaddy Purple"
+                 })
         {
             MiloLineFacts facts = FullFacts();
             facts.InputProductName = input;

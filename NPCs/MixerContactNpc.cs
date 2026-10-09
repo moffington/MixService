@@ -39,7 +39,8 @@ public sealed class MixerContactNpc : NPC
     {
         new(DrugType.Cocaine, "cocaine", "Cocaine"),
         new(DrugType.Methamphetamine, "meth", "Meth"),
-        new(DrugType.Shrooms, "shrooms", "Shrooms")
+        new(DrugType.Shrooms, "shrooms", "Shrooms"),
+        new(DrugType.Marijuana, "weed", "Weed")
     };
 
     private const int ProcessingDurationMinutes = 6 * 60;
@@ -304,6 +305,30 @@ public sealed class MixerContactNpc : NPC
 
         ProductDefinition[] targets =
             GetDiscoveredTargets(family);
+        bool hadDiscoveredTargets = targets.Length > 0;
+
+        if (family.DrugType == DrugType.Marijuana)
+        {
+            if (!GameMixRecipeReader.TryReadWeedRecipes(
+                    out IReadOnlyList<MixRecipeLink> recipes,
+                    out string problem))
+            {
+                MelonLogger.Warning($"Weed recipes unavailable: {problem}");
+                SendWeedRecipesUnavailable();
+                return;
+            }
+
+            targets = targets
+                .Where(product => WeedRecipeResolver.TryResolveBase(
+                    product.ID, recipes, out _, out _))
+                .ToArray();
+
+            if (hadDiscoveredTargets && targets.Length == 0)
+            {
+                SendWeedRecipesUnavailable();
+                return;
+            }
+        }
 
         if (targets.Length == 0)
         {
@@ -366,10 +391,32 @@ public sealed class MixerContactNpc : NPC
 
             response.OnTriggered = () =>
             {
-                PresentQuantityMenu(
-                    family,
-                    targetId,
-                    targetName);
+                if (family.DrugType == DrugType.Marijuana)
+                {
+                    if (!TryGetWeedBase(
+                            targetId,
+                            out string baseId,
+                            out string baseName,
+                            out string problem))
+                    {
+                        MelonLogger.Warning(
+                            $"Cannot order weed mix '{targetId}': {problem}");
+                        SendWeedRecipesUnavailable();
+                        return;
+                    }
+
+                    PresentQuantityMenu(
+                        family, targetId, targetName, baseId, baseName);
+                }
+                else
+                {
+                    PresentQuantityMenu(
+                        family,
+                        targetId,
+                        targetName,
+                        family.InputProductId,
+                        family.InputProductName);
+                }
             };
 
             responses.Add(response);
@@ -407,18 +454,141 @@ public sealed class MixerContactNpc : NPC
             .Where(product =>
                 product.PrimaryDrugType ==
                     family.DrugType
-                && !string.Equals(
-                    product.ID,
-                    family.InputProductId,
-                    StringComparison.OrdinalIgnoreCase))
+                && !IsBaseProduct(family, product.ID))
             .OrderBy(product => product.Name)
             .ToArray();
+    }
+
+    private static bool IsBaseProduct(MixFamily family, string productId)
+    {
+        if (family.DrugType == DrugType.Marijuana)
+            return WeedRecipeResolver.IsBaseProduct(productId);
+
+        return string.Equals(
+            family.InputProductId,
+            productId,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetWeedBase(
+        string targetProductId,
+        out string baseProductId,
+        out string baseProductName,
+        out string problem)
+    {
+        baseProductId = string.Empty;
+        baseProductName = string.Empty;
+        if (!GameMixRecipeReader.TryReadWeedRecipes(
+                out IReadOnlyList<MixRecipeLink> recipes,
+                out problem))
+        {
+            return false;
+        }
+
+        if (!WeedRecipeResolver.TryResolveBase(
+                targetProductId,
+                recipes,
+                out baseProductId,
+                out problem))
+        {
+            return false;
+        }
+
+        if (ItemManager.GetDefinition(baseProductId)
+            is not ProductDefinition baseProduct ||
+            baseProduct.PrimaryDrugType != DrugType.Marijuana)
+        {
+            problem = $"weed base '{baseProductId}' is unavailable";
+            return false;
+        }
+
+        baseProductName = baseProduct.Name;
+        return true;
+    }
+
+    private bool ValidateAwaitingWeedOrder(bool repeatMessage = false)
+    {
+        if (_job.State != MixJobState.AwaitingDeposit)
+            return true;
+
+        bool isWeedOrder = WeedRecipeResolver.IsBaseProduct(
+                _job.InputProductId) ||
+            ItemManager.GetDefinition(_job.TargetProductId)
+                is ProductDefinition target &&
+            target.PrimaryDrugType == DrugType.Marijuana;
+
+        if (!isWeedOrder)
+            return true;
+
+        if (!TryGetWeedBase(
+                _job.TargetProductId,
+                out string expectedBaseId,
+                out string expectedBaseName,
+                out string problem))
+        {
+            SendBlockedWeedOrder(
+                MiloIntent.WeedOrderRecipeUnavailable,
+                problem,
+                repeatMessage);
+            return false;
+        }
+
+        if (!string.Equals(
+                _job.InputProductId,
+                expectedBaseId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            SendBlockedWeedOrder(
+                MiloIntent.WeedOrderNeedsRebooking,
+                $"saved input '{_job.InputProductId}' differs from " +
+                    $"recipe base '{expectedBaseId}'",
+                repeatMessage);
+            return false;
+        }
+
+        _job.InputProductName = expectedBaseName;
+        return true;
+    }
+
+    private void SendBlockedWeedOrder(
+        MiloIntent intent,
+        string problem,
+        bool repeatMessage)
+    {
+        string warning = $"Weed order '{_job.TargetProductId}' blocked: {problem}";
+        if (!repeatMessage && !_rejectionGuard.ShouldEmit(warning))
+            return;
+
+        MelonLogger.Warning(warning);
+        Messaging.SendTextMessage(
+            MiloDialogue.Line(intent, DepositFacts(_reservedDrop)),
+            intent == MiloIntent.WeedOrderNeedsRebooking
+                ? new[] { CreateCancelOrderResponse() }
+                : new[] { CreateStatusResponse(), CreateCancelOrderResponse() },
+            responseDelay: 0f);
+    }
+
+    private void SendWeedRecipesUnavailable()
+    {
+        Messaging.SendTextMessage(
+            MiloDialogue.Line(
+                MiloIntent.WeedRecipesUnavailable,
+                new MiloLineFacts()),
+            new[]
+            {
+                Button(
+                    MiloIntent.ButtonDifferentDrug,
+                    PresentDrugMenu,
+                    "mixservice_weed_recipe_retry")
+            });
     }
 
     private void PresentQuantityMenu(
         MixFamily family,
         string targetProductId,
-        string targetProductName)
+        string targetProductName,
+        string inputProductId,
+        string inputProductName)
     {
         if (_job.State != MixJobState.Idle)
         {
@@ -446,6 +616,8 @@ public sealed class MixerContactNpc : NPC
                         family,
                         targetProductId,
                         targetProductName,
+                        inputProductId,
+                        inputProductName,
                         selected)));
         }
 
@@ -469,6 +641,8 @@ public sealed class MixerContactNpc : NPC
         MixFamily family,
         string targetProductId,
         string targetProductName,
+        string inputProductId,
+        string inputProductName,
         int requiredBricks)
     {
         // Old response buttons can remain visible in the phone conversation.
@@ -493,6 +667,32 @@ public sealed class MixerContactNpc : NPC
         }
 
         targetProductName = target.Name;
+
+        if (family.DrugType == DrugType.Marijuana)
+        {
+            if (!TryGetWeedBase(
+                    targetProductId,
+                    out string currentBaseId,
+                    out string currentBaseName,
+                    out string problem))
+            {
+                MelonLogger.Warning(
+                    $"Cannot create weed order '{targetProductId}': {problem}");
+                SendWeedRecipesUnavailable();
+                return;
+            }
+
+            if (!string.Equals(
+                    inputProductId,
+                    currentBaseId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                PresentTargetMenu(family, 0);
+                return;
+            }
+
+            inputProductName = currentBaseName;
+        }
 
         DeadDropInstance? assignedDrop =
             OrderDropAssignment.ChooseEmpty();
@@ -522,10 +722,10 @@ public sealed class MixerContactNpc : NPC
         _pickupLocationKnown = false;
 
         _job.InputProductId =
-            family.InputProductId;
+            inputProductId;
 
         _job.InputProductName =
-            family.InputProductName;
+            inputProductName;
 
         _job.TargetProductId =
             targetProductId;
@@ -553,7 +753,7 @@ public sealed class MixerContactNpc : NPC
         AttachReservedDropListener();
 
         MelonLogger.Msg(
-            $"Quoted order: {requiredBricks} {family.InputProductName} bricks -> " +
+            $"Quoted order: {requiredBricks} {inputProductName} bricks -> " +
             $"'{targetProductName}' for ${_job.QuotedFee:N0} " +
             $"at '{assignedDrop.Name}' GUID={assignedDrop.GUID}.");
 
@@ -609,6 +809,8 @@ public sealed class MixerContactNpc : NPC
         _job.State = MixJobState.AwaitingDeposit;
         _reservedDrop = assignedDrop;
         AttachReservedDropListener();
+        if (!ValidateAwaitingWeedOrder())
+            return;
         SendDepositInstructions();
     }
 
@@ -655,6 +857,9 @@ public sealed class MixerContactNpc : NPC
         }
 
         AttachReservedDropListener();
+
+        if (!ValidateAwaitingWeedOrder())
+            return;
 
         if (_job.PaymentNeedsReview)
         {
@@ -714,6 +919,9 @@ public sealed class MixerContactNpc : NPC
             return;
 
         if (_depositAcknowledged)
+            return;
+
+        if (!ValidateAwaitingWeedOrder())
             return;
 
         if (_job.PaymentNeedsReview)
@@ -799,6 +1007,9 @@ public sealed class MixerContactNpc : NPC
         ProductDeposit batch)
     {
         if (_reservedDrop == null)
+            return;
+
+        if (!ValidateAwaitingWeedOrder())
             return;
 
         DeadDropInstance drop =
@@ -1058,6 +1269,9 @@ public sealed class MixerContactNpc : NPC
                 break;
 
             case MixJobState.AwaitingDeposit:
+                if (!ValidateAwaitingWeedOrder(repeatMessage: true))
+                    break;
+
                 if (_job.PaymentNeedsReview)
                 {
                     Messaging.SendTextMessage(
